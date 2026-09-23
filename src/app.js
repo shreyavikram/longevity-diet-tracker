@@ -17,7 +17,7 @@ import {
   scaleNutrients
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
-import { renderApp, renderInstallStatus, renderTargetCards, renderUpdateBanner } from './views.js';
+import { renderApp, renderInstallStatus, renderUpdateBanner } from './views.js';
 import { analyzeInput, resolveDraft } from './analysis.js';
 import { rankCandidates, searchFoods } from './services/food-data-central.js';
 import { buildAdjustmentRecommendation } from './trends.js';
@@ -295,24 +295,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
   }
 
-  function patchOnboardingTargets() {
-    const region = documentRef?.querySelector?.('[data-region="onboarding-targets"]');
-    if (!region) return false;
-    const targets = computeTargets(state.draft.profile);
-    region.innerHTML = renderTargetCards(targets);
-    const calorieOverride = documentRef.querySelector('form[data-action="complete-onboarding"] [name="averageCalories"]');
-    if (calorieOverride) calorieOverride.min = String(targets?.bmr ?? 0);
-    return true;
-  }
-
   function render() {
     const root = getRoot();
     if (!root) return;
     const focused = focusSelector(documentRef?.activeElement);
     const data = store.loadAll();
-    const computedTargets = data.meta.onboardingComplete
-      ? data.targets.computed ?? computeTargets(data.profile)
-      : computeTargets(state.draft?.profile ?? data.profile);
+    const computedTargets = data.targets.computed ?? computeTargets(data.profile);
     root.innerHTML = renderApp({
       state,
       data,
@@ -402,10 +390,20 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     store.update('meta', meta => ({
       ...meta,
       onboardingComplete: true,
-      disclaimerAcknowledgedAt: action.disclaimerAcknowledgedAt ?? clock().toISOString()
+      disclaimerAcknowledgedAt: action.silent ? meta.disclaimerAcknowledgedAt ?? null : action.disclaimerAcknowledgedAt ?? clock().toISOString()
     }));
     state.route = 'today';
     state.draft = null;
+  }
+
+  // There is no setup screen: a fresh, erased, or imported-unfinished store is set up from its saved
+  // profile (the prefilled defaults) and opens on Today. Everything stays editable in Settings.
+  function ensureSetup() {
+    if (store.get('meta').onboardingComplete) return false;
+    const settings = store.get('settings');
+    completeOnboarding({ silent: true, profile: store.get('profile'), units: settings.units,
+      usesSupplements: settings.usesSupplements, overrides: store.get('targets').overrides ?? {} });
+    return true;
   }
 
   function valuesFromForm(form) {
@@ -420,20 +418,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       if (raw !== null && raw !== '') overrides[field] = finiteNonNegative(raw, field);
     }
     return overrides;
-  }
-
-  function draftFromForm(formData, changedName = '') {
-    const settings = store.get('settings');
-    const currentUnits = state.draft?.units ?? settings.units;
-    const selectedUnits = formData.get('units') === 'metric' ? 'metric' : 'imperial';
-    const parseUnits = changedName === 'units' ? currentUnits : selectedUnits;
-    return {
-      profile: profileFromForm(formData, state.draft?.profile ?? store.get('profile'), parseUnits),
-      units: selectedUnits,
-      usesSupplements: formData.has('usesSupplements'),
-      acknowledgeDisclaimer: formData.has('acknowledgeDisclaimer'),
-      overrides: targetOverridesFromForm(formData)
-    };
   }
 
   function saveLibraryItem(item) {
@@ -780,7 +764,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   function dispatch(action) {
     if (!action || typeof action.type !== 'string') throw new TypeError('Actions require a type');
-    if (['OPEN_MANUAL_ENTRY', 'OPEN_LIBRARY_ITEM', 'OPEN_LOG_ENTRY', 'RESET_DATA', 'RESTART_ONBOARDING'].includes(action.type)
+    if (['OPEN_MANUAL_ENTRY', 'OPEN_LIBRARY_ITEM', 'OPEN_LOG_ENTRY', 'RESET_DATA'].includes(action.type)
       && (analysisController || state.analysis)) cancelAnalysis();
     switch (action.type) {
       case 'APPLY_UPDATE':
@@ -795,6 +779,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         } catch {
           throw new Error('Import file failed validation or could not be saved. Existing data was kept.');
         }
+        ensureSetup();
         state.route = 'today';
         state.draft = null;
         state.analysis = null;
@@ -843,9 +828,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           foodDataCentralApiKey: String(action.foodDataCentralApiKey ?? '').trim(),
           model: String(action.model ?? settings.model)
         }));
-        break;
-      case 'RESTART_ONBOARDING':
-        store.update('meta', meta => ({ ...meta, onboardingComplete: false }));
         break;
       // These state actions are the stable controller contract for the Library,
       // Today, and Progress UI tasks that build on this shell.
@@ -982,6 +964,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'RESET_DATA':
         if (action.confirmation !== 'RESET ALL DATA') throw new Error('Type RESET ALL DATA to confirm');
         store.reset();
+        ensureSetup();
         state.route = 'today';
         state.draft = null;
         waterUndo.clear();
@@ -990,7 +973,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         throw new Error(`Unknown action: ${action.type}`);
     }
     render();
-    if (['COMPLETE_ONBOARDING', 'RESTART_ONBOARDING', 'RESET_DATA', 'IMPORT_DATA'].includes(action.type)) resetScroll();
+    if (['COMPLETE_ONBOARDING', 'RESET_DATA', 'IMPORT_DATA'].includes(action.type)) resetScroll();
   }
 
   function navigate(route) {
@@ -1013,7 +996,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (!control) return;
     if (control.tagName !== 'FORM') state.notice = null;
     if (control.dataset.action === 'navigate') navigate(control.dataset.route);
-    if (control.dataset.action === 'restart-onboarding') dispatch({ type: 'RESTART_ONBOARDING' });
     if (control.dataset.action === 'install-app') pwa?.install();
     if (control.dataset.action === 'apply-update') dispatch({ type: 'APPLY_UPDATE' });
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
@@ -1081,10 +1063,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   function handleChange(event) {
     const form = event.target.closest?.('form[data-action]');
     if (!form) return;
-    if (form.dataset.action === 'complete-onboarding') {
-      state.draft = draftFromForm(valuesFromForm(form), event.target.name);
-      if (event.target.name === 'units' || !patchOnboardingTargets()) render();
-    }
     if (form.dataset.action === 'confirm-item'
       && event.target.name === 'type'
       && state.draft?.mode !== 'logEdit') {
@@ -1201,17 +1179,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           render();
         } else openAnalysisReview(resolved);
         return;
-      }
-      case 'complete-onboarding': {
-        const draft = draftFromForm(formData);
-        dispatch({
-          type: 'COMPLETE_ONBOARDING',
-          profile: draft.profile,
-          units: draft.units,
-          usesSupplements: draft.usesSupplements,
-          overrides: draft.overrides
-        });
-        break;
       }
       case 'save-profile':
         dispatch({ type: 'SAVE_PROFILE', profile: profileFromForm(formData, store.get('profile')) });
@@ -1334,7 +1301,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       if (store.get('meta').activitySyncedAt !== activity.generatedAt) {
         store.update('meta', meta => ({ ...meta, activitySyncedAt: activity.generatedAt }));
       }
-      if (store.get('meta').onboardingComplete && !isEditing()) render();
+      if (!isEditing()) render();
       return changed;
     } catch {
       return false;
@@ -1362,6 +1329,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   }
 
   function start() {
+    ensureSetup();
     const root = getRoot();
     if (root && !listenersBound) {
       root.addEventListener('click', guarded(handleClick));

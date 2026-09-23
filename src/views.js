@@ -206,59 +206,6 @@ export function renderTargetCards(targets, { showDerivation = true } = {}) {
   ${showDerivation ? `<p class="explanation">Based on an estimated ${format(targets.bmr)} kcal BMR and ${format(targets.maintenanceCalories)} kcal maintenance level. These are editable planning references, not guarantees.</p>` : ''}`;
 }
 
-export function renderOnboarding({ data, computedTargets, draft = null }) {
-  const { settings } = data;
-  const profile = draft?.profile ?? data.profile;
-  const units = draft?.units ?? settings.units;
-  const usesSupplements = draft?.usesSupplements ?? settings.usesSupplements ?? false;
-  const overrides = draft?.overrides ?? data.targets.overrides ?? {};
-  const acknowledgeDisclaimer = draft?.acknowledgeDisclaimer ?? false;
-  return `<main id="main-content" class="page onboarding-page">
-    <div class="welcome">
-      <span class="eyebrow">Set up your private tracker</span>
-      <h1>Build a useful starting point</h1>
-      <p>Your saved tracker data stays on this device. Analysis content you choose to submit goes directly to the AI service you pick in Settings (Google Gemini or Anthropic) and to USDA.</p>
-    </div>
-    <section class="card stack" aria-labelledby="restore-heading"><h2 id="restore-heading">Moving from another device?</h2><p class="muted">Restore a JSON export from Settings on your other device instead of starting fresh. API keys are not restored here; add them again in Settings.</p><form class="stack" data-action="import-data"><label>Choose JSON export<input name="file" type="file" accept=".json,application/json" required></label><button class="secondary-button" type="submit">Restore backup</button></form></section>
-    <form class="stack" data-action="complete-onboarding">
-      <section class="card step-card" aria-labelledby="setup-profile">
-        <div class="step-number" aria-hidden="true">1</div>
-        <div><h2 id="setup-profile">Personal profile</h2><p class="muted">Values are stored in metric units for consistent calculations.</p></div>
-        ${renderProfileFields(profile, units, 'onboarding', { showPreferences: true })}
-      </section>
-      <section class="card step-card" aria-labelledby="setup-pace">
-        <div class="step-number" aria-hidden="true">2</div>
-        <div><h2 id="setup-pace">Choose a pace</h2><p class="muted">Your moderate starting pace is preselected.</p></div>
-        ${renderPaceOptions(profile.pace)}
-      </section>
-      <section class="card step-card" aria-labelledby="setup-targets">
-        <div class="step-number" aria-hidden="true">3</div>
-        <div><h2 id="setup-targets">Review calculated targets</h2><p class="muted">Training calories are redistributed within the weekly budget.</p></div>
-        <div data-region="onboarding-targets" aria-live="polite">${renderTargetCards(computedTargets)}</div>
-        <fieldset class="stack"><legend>Optional manual overrides</legend><p class="muted">Leave fields blank to use the calculated reference above.</p><div class="field-grid">
-          <label>Calorie override<input name="averageCalories" type="number" min="${computedTargets?.bmr ?? 0}" step="25" value="${escapeHtml(overrides.averageCalories ?? '')}" placeholder="Use calculated"></label>
-          <label>Protein override (g)<input name="proteinG" type="number" min="0" step="5" value="${escapeHtml(overrides.proteinG ?? '')}" placeholder="Use calculated"></label>
-        </div></fieldset>
-      </section>
-      <section class="card step-card" aria-labelledby="setup-supplements">
-        <div class="step-number" aria-hidden="true">4</div>
-        <div><h2 id="setup-supplements">Supplements</h2><p class="muted">Add exact products and label amounts later. The app will never invent a dose.</p></div>
-        <label class="choice inline-choice"><input type="checkbox" name="usesSupplements"${checked(usesSupplements)}> <span>I use one or more supplements</span></label>
-      </section>
-      <section class="card step-card" aria-labelledby="setup-huel">
-        <div class="step-number" aria-hidden="true">5</div>
-        <div><h2 id="setup-huel">Starter Huel categories</h2><p class="muted">We will add editable Black Edition-style smoothie and Hot &amp; Savory placeholders. They stay unverified until you enter a current package label.</p></div>
-      </section>
-      <section class="card step-card" aria-labelledby="setup-disclaimer">
-        <div class="step-number" aria-hidden="true">6</div>
-        <div><h2 id="setup-disclaimer">One important note</h2><p>${DISCLAIMER}</p></div>
-        <label class="choice inline-choice"><input type="checkbox" name="acknowledgeDisclaimer" required${checked(acknowledgeDisclaimer)}> <span>I understand and want to continue</span></label>
-      </section>
-      <button class="primary-button full-width" type="submit">Start tracking</button>
-    </form>
-  </main>`;
-}
-
 function renderLogEntries(data, selectedDate) {
   const entries = data.log[selectedDate] ?? [];
   if (!entries.length) return '<p class="muted">No meals logged for this date yet.</p>';
@@ -687,8 +634,8 @@ export function renderSettings({ data, ui = {} }) {
     <section class="card stack" aria-labelledby="install-heading"><h2 id="install-heading">Install and offline use</h2><div class="stack" data-region="install-status">${renderInstallStatus(ui)}</div></section>
     <section class="card stack" aria-labelledby="data-heading"><h2 id="data-heading">Export and import</h2><p><strong>${meta.lastExportAt ? `Last export: ${escapeHtml(new Date(meta.lastExportAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }))}` : 'No export saved from this device yet.'}</strong> Your history lives only in this browser, so export regularly and keep the file somewhere safe.</p><p class="muted">Downloads contain your local tracker history. By default, API keys are excluded. Files you save may be readable by others with access to them.</p><form class="stack" data-action="export-data"><label class="choice inline-choice"><input name="includeSecrets" type="checkbox"><span>Include API keys in export</span></label><p class="muted">Warning: including API keys exposes them to anyone who can open the downloaded file. You will be asked to confirm.</p><button class="secondary-button" type="submit">Download export</button></form><form class="stack" data-action="import-data"><label>Choose JSON export<input name="file" type="file" accept=".json,application/json" required></label><label class="choice inline-choice"><input name="includeSecrets" type="checkbox"><span>Include API keys from import</span></label><p class="muted">Import replaces local tracker data. Imported API keys are excluded unless you choose to include them and confirm.</p><button class="secondary-button" type="submit">Import file</button></form>${ui.dataStatus ? `<p role="status">${escapeHtml(ui.dataStatus)}</p>` : ''}</section>
     <section class="card stack" aria-labelledby="evidence-notes"><div><h2 id="evidence-notes">Evidence notes</h2><p class="muted">Targets distinguish RDAs, AIs, limits, and evidence-informed ranges.</p></div><ul class="evidence-list">${NUTRIENTS.filter(item => item.citation).map(item => `<li><a href="${escapeHtml(item.citation)}" target="_blank" rel="noreferrer">${escapeHtml(item.label)}: ${escapeHtml(item.evidence)}</a></li>`).join('')}</ul></section>
-    <section class="card stack danger-zone" aria-labelledby="restart-heading"><div><h2 id="restart-heading">Onboarding and local data</h2><p class="muted">Restart onboarding without deleting your saved history, or erase all local data with the exact confirmation.</p></div><button class="secondary-button" type="button" data-action="restart-onboarding">Restart onboarding</button><form class="inline-form" data-action="reset-data"><label>Type RESET ALL DATA<input name="confirmation" autocomplete="off"></label><button class="danger-button" type="submit">Erase local data</button></form>${formNotice(ui, 'reset-data')}</section>
-    <section class="card disclaimer-card" aria-labelledby="disclaimer-heading"><h2 id="disclaimer-heading">Disclaimer</h2><p>${DISCLAIMER}</p><p class="muted">Acknowledged: ${meta.disclaimerAcknowledgedAt ? escapeHtml(new Date(meta.disclaimerAcknowledgedAt).toLocaleDateString('en-US')) : 'Not yet'}</p></section>
+    <section class="card stack danger-zone" aria-labelledby="erase-heading"><div><h2 id="erase-heading">Erase local data</h2><p class="muted">Removes all tracker history from this browser and starts over from your default profile. Download an export first if you may want it back.</p></div><form class="inline-form" data-action="reset-data"><label>Type RESET ALL DATA<input name="confirmation" autocomplete="off"></label><button class="danger-button" type="submit">Erase local data</button></form>${formNotice(ui, 'reset-data')}</section>
+    <section class="card disclaimer-card" aria-labelledby="disclaimer-heading"><h2 id="disclaimer-heading">Disclaimer</h2><p>${DISCLAIMER}</p></section>
   </section>`;
 }
 
@@ -700,12 +647,6 @@ function renderGlobalNotices(ui, showDataStatus) {
 }
 
 export function renderApp({ state, data, computedTargets = data.targets.computed, effectiveTargets = resolveEffectiveTargets(data.targets), ui = {} }) {
-  if (!data.meta.onboardingComplete) {
-    return `<a class="skip-link" href="#main-content">Skip to content</a>
-      <header class="app-header"><div class="brand-mark" aria-hidden="true">L</div><span>Longevity</span></header>
-      ${renderGlobalNotices(ui, true)}
-      ${renderOnboarding({ data, computedTargets, draft: state.draft })}`;
-  }
   const content = state.draft?.kind === 'confirmation'
     ? renderConfirmation({ data, state, ui })
     : state.route === 'settings'
