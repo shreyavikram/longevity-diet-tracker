@@ -389,3 +389,4 @@ h1[tabindex="-1"]:focus { outline: none; }
 .coverage-toggle strong { flex: 0 0 auto; color: var(--lime); font-size: .85rem; }
 .workout-line { margin: -4px 0 0; border-radius: 14px; background: var(--surface-alt); padding: 10px 14px; font-weight: 650; }
 .workout-line .eyebrow { margin-bottom: 2px; }
+details > summary { display: flex; min-height: 44px; align-items: center; cursor: pointer; color: var(--forest); font-weight: 700; }

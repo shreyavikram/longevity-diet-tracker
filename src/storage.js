@@ -188,6 +188,7 @@ export function createStore({ storage, now = () => new Date() }) {
     const payload = loadAll();
     if (!includeSecrets) {
       payload.settings.anthropicApiKey = '';
+      payload.settings.geminiApiKey = '';
       payload.settings.foodDataCentralApiKey = '';
     }
     payload.exportedAt = now().toISOString();
@@ -210,6 +211,7 @@ export function createStore({ storage, now = () => new Date() }) {
     }
     if (!includeSecrets) {
       prepared.settings.anthropicApiKey = '';
+      prepared.settings.geminiApiKey = '';
       prepared.settings.foodDataCentralApiKey = '';
     }
     writeAtomically(prepared, 'Import could not be saved. Existing data was restored.');

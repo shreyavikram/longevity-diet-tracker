@@ -97,6 +97,9 @@ export const DEFAULT_STATE = Object.freeze({
   settings: {
     units: 'imperial',
     usesSupplements: false,
+    provider: 'gemini',
+    geminiApiKey: '',
+    geminiModel: 'gemini-3.8-flash',
     anthropicApiKey: '',
     foodDataCentralApiKey: '',
     model: 'claude-sonnet-5',

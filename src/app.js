@@ -142,7 +142,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, coverageOpen: false, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, coverageOpen: false, usda: null, installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
@@ -835,8 +835,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'SET_INTEGRATIONS':
         store.update('settings', settings => ({
           ...settings,
-          anthropicApiKey: String(action.anthropicApiKey ?? ''),
-          foodDataCentralApiKey: String(action.foodDataCentralApiKey ?? ''),
+          provider: ['gemini', 'anthropic'].includes(action.provider) ? action.provider
+            : String(action.anthropicApiKey ?? '').trim() && !String(action.geminiApiKey ?? '').trim() ? 'anthropic' : 'gemini',
+          geminiApiKey: String(action.geminiApiKey ?? settings.geminiApiKey ?? '').trim(),
+          geminiModel: String(action.geminiModel ?? settings.geminiModel ?? '').trim() || 'gemini-3.8-flash',
+          anthropicApiKey: String(action.anthropicApiKey ?? '').trim(),
+          foodDataCentralApiKey: String(action.foodDataCentralApiKey ?? '').trim(),
           model: String(action.model ?? settings.model)
         }));
         break;
@@ -998,6 +1002,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     state.draft = null;
     state.notice = null;
     state.dataStatus = '';
+    state.usda = null;
     render();
     resetScroll();
     focusHeading();
@@ -1149,6 +1154,29 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           render();
         });
       }
+      case 'usda-search': {
+        const query = String(formData.get('query') ?? '').trim();
+        if (!query) return;
+        state.usda = { status: 'loading', query };
+        render();
+        return searchFoods(query, store.get('settings').foodDataCentralApiKey, fetchFn)
+          .then(foods => { state.usda = { status: 'results', query, foods: rankCandidates({ name: query, usdaSearch: query }, foods).slice(0, 8) }; })
+          .catch(error => { state.usda = { status: 'error', query, error: error?.name === 'AnalysisError' ? error.message : 'USDA food search is unavailable.' }; })
+          .finally(() => render());
+      }
+      case 'usda-pick': {
+        const food = state.usda?.foods?.find(candidate => String(candidate.fdcId) === String(formData.get('fdcId')));
+        const grams = Number(formData.get('grams'));
+        if (!food || !Number.isFinite(grams) || grams <= 0) throw new TypeError('Choose a food and enter an amount in grams.');
+        const amount = `${Number(grams.toPrecision(6))} g`;
+        const resolved = resolveDraft({ kind: 'description', name: food.description, servingLabel: amount, confidence: 'high', assumptions: [],
+          totalServings: 1, labelNutrients: {}, labelServingGrams: null,
+          components: [{ name: food.description, householdAmount: amount, estimatedGrams: grams, usdaSearch: state.usda.query,
+            confidence: 'high', candidates: [food], selectedFdcId: food.fdcId }] });
+        state.usda = null;
+        openAnalysisReview(resolved);
+        return;
+      }
       case 'analyze-food':
         return startAnalysis({ kind: formData.get('kind'), text: formData.get('text'), image: formData.get('image')?.size ? formData.get('image') : null });
       case 'retry-analysis':
@@ -1211,6 +1239,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'save-integrations':
         dispatch({
           type: 'SET_INTEGRATIONS',
+          provider: formData.get('provider'),
+          geminiApiKey: formData.get('geminiApiKey'),
+          geminiModel: formData.get('geminiModel'),
           anthropicApiKey: formData.get('anthropicApiKey'),
           foodDataCentralApiKey: formData.get('foodDataCentralApiKey'),
           model: formData.get('model')

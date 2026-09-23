@@ -20,9 +20,27 @@ const VALID_KINDS = new Set(['description', 'recipe', 'foodPhoto', 'labelPhoto']
 const NUTRIENT_DEFINITIONS = [...new Map([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => [item.key, item])).values()];
 const NUTRIENT_KEYS = new Set(NUTRIENT_DEFINITIONS.map(item => item.key));
 
-function parseResponse(message) {
+function anthropicText(message) {
   if (!record(message) || !Array.isArray(message.content)) throw invalid();
-  const raw = message.content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('').trim();
+  return message.content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('');
+}
+
+function geminiText(payload) {
+  if (!record(payload)) throw invalid();
+  if (payload.promptFeedback?.blockReason && !payload.candidates?.length) {
+    throw new AnalysisError('blocked', 'Gemini declined to analyze this. Try a different photo or description, or enter nutrition manually.');
+  }
+  const candidate = payload.candidates?.[0];
+  if (candidate?.finishReason === 'SAFETY' || candidate?.finishReason === 'PROHIBITED_CONTENT') {
+    throw new AnalysisError('blocked', 'Gemini declined to analyze this. Try a different photo or description, or enter nutrition manually.');
+  }
+  const parts = candidate?.content?.parts;
+  if (!Array.isArray(parts)) throw invalid();
+  return parts.filter(part => typeof part?.text === 'string' && !part.thought).map(part => part.text).join('');
+}
+
+function parseResponse(rawText) {
+  const raw = String(rawText).trim();
   const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   let parsed;
   try { parsed = JSON.parse(json); } catch { throw invalid(); }
@@ -68,42 +86,85 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// Gemini's free tier is the default provider; Anthropic remains available when chosen in Settings.
+export function analysisProvider(settings) {
+  if (settings?.provider === 'anthropic' || settings?.provider === 'gemini') return settings.provider;
+  return settings?.anthropicApiKey && !settings?.geminiApiKey ? 'anthropic' : 'gemini';
+}
+
+export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+
+async function callAnthropic({ settings, image, imageData, userText, fetchFn, signal }) {
+  const content = [];
+  if (image) content.push({ type: 'image', source: { type: 'base64', media_type: image.type, data: imageData } });
+  content.push({ type: 'text', text: userText });
+  const response = await fetchFn('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': settings.anthropicApiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({ model: settings.model || 'claude-sonnet-5', max_tokens: 1600, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] }),
+    signal
+  });
+  if (!response.ok) {
+    const code = response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate_limit' : 'service';
+    throw new AnalysisError(code, code === 'auth' ? 'Anthropic rejected the API key. Check it in Settings.' : code === 'rate_limit' ? 'Anthropic is rate limiting requests. Try again shortly.' : 'Anthropic analysis is unavailable. Try again or enter nutrition manually.');
+  }
+  let payload;
+  try { payload = await response.json(); } catch { throw invalid(); }
+  return anthropicText(payload);
+}
+
+async function callGemini({ settings, image, imageData, userText, fetchFn, signal }) {
+  const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
+  const parts = [];
+  if (image) parts.push({ inlineData: { mimeType: image.type, data: imageData } });
+  parts.push({ text: userText });
+  const response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': settings.geminiApiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts }],
+      generationConfig: { responseMimeType: 'application/json' } }),
+    signal
+  });
+  if (!response.ok) {
+    let reason = '';
+    try { reason = JSON.stringify((await response.json())?.error?.details ?? ''); } catch { reason = ''; }
+    if (response.status === 403 || reason.includes('API_KEY_INVALID')) {
+      throw new AnalysisError('auth', 'Gemini rejected the API key. Check it in Settings.');
+    }
+    if (response.status === 404) throw new AnalysisError('model', 'Gemini did not recognize the model name. Check it in Settings.');
+    if (response.status === 429) throw new AnalysisError('rate_limit', 'The free Gemini limit is used up for now. Try again later or enter nutrition manually.');
+    throw new AnalysisError('service', 'Gemini analysis is unavailable. Try again or enter nutrition manually.');
+  }
+  let payload;
+  try { payload = await response.json(); } catch { throw invalid(); }
+  return geminiText(payload);
+}
+
 export async function requestAnalysis({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal }) {
   if (!VALID_KINDS.has(kind)) throw new AnalysisError('invalid_input', 'Choose a supported analysis type.');
-  if (!settings?.anthropicApiKey) throw new AnalysisError('missing_key', 'Add an Anthropic API key in Settings to use analysis.');
+  const provider = analysisProvider(settings);
+  if (provider === 'gemini' && !settings?.geminiApiKey) throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
+  if (provider === 'anthropic' && !settings?.anthropicApiKey) throw new AnalysisError('missing_key', 'Add an Anthropic API key in Settings to use analysis.');
   if (['foodPhoto', 'labelPhoto'].includes(kind) && !image) throw new AnalysisError('invalid_input', 'Select a photo for this analysis.');
   if (!text?.trim() && !image) throw new AnalysisError('invalid_input', 'Add a description or photo to analyze.');
   let imageData;
   try {
-    const content = [];
     if (image) {
       if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(image.type) || image.size > 8_000_000) {
         throw new AnalysisError('invalid_image', 'Choose a JPEG, PNG, WebP, or GIF image under 8 MB.');
       }
       imageData = bytesToBase64(new Uint8Array(await image.arrayBuffer()));
       if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
-      content.push({ type: 'image', source: { type: 'base64', media_type: image.type, data: imageData } });
     }
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
-    content.push({ type: 'text', text: JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients }) });
-    const response = await fetchFn('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': settings.anthropicApiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({ model: settings.model || 'claude-sonnet-5', max_tokens: 1600, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] }),
-      signal
-    });
-    if (!response.ok) {
-      const code = response.status === 401 || response.status === 403 ? 'auth' : response.status === 429 ? 'rate_limit' : 'service';
-      throw new AnalysisError(code, code === 'auth' ? 'Anthropic rejected the API key. Check it in Settings.' : code === 'rate_limit' ? 'Anthropic is rate limiting requests. Try again shortly.' : 'Anthropic analysis is unavailable. Try again or enter nutrition manually.');
-    }
-    let payload;
-    try { payload = await response.json(); } catch { throw invalid(); }
-    const parsed = parseResponse(payload);
+    const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients });
+    const call = provider === 'gemini' ? callGemini : callAnthropic;
+    const parsed = parseResponse(await call({ settings, image, imageData, userText, fetchFn, signal }));
     if (kind !== 'labelPhoto' && (parsed.labelNutrients !== undefined || parsed.labelServingGrams !== undefined || parsed.labelComponentIndex !== undefined)) throw invalid();
     return parsed;
   } catch (error) {
