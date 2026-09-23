@@ -1,0 +1,385 @@
+{
+  "version": 1,
+  "source": "lift",
+  "generatedAt": "2026-09-23T23:22:17.028Z",
+  "days": {
+    "2025-10-08": [
+      {
+        "name": "Legs",
+        "minutes": 95
+      }
+    ],
+    "2025-10-16": [
+      {
+        "name": "Pull 1",
+        "minutes": 96
+      }
+    ],
+    "2025-10-18": [
+      {
+        "name": "Push 1",
+        "minutes": 68
+      }
+    ],
+    "2025-10-20": [
+      {
+        "name": "Legs",
+        "minutes": 96
+      }
+    ],
+    "2025-10-22": [
+      {
+        "name": "Pull 2",
+        "minutes": 92
+      }
+    ],
+    "2025-10-23": [
+      {
+        "name": "Push 2",
+        "minutes": 100
+      }
+    ],
+    "2025-10-27": [
+      {
+        "name": "Legs",
+        "minutes": 90
+      }
+    ],
+    "2025-10-29": [
+      {
+        "name": "Pull 1",
+        "minutes": 68
+      }
+    ],
+    "2025-11-01": [
+      {
+        "name": "Push 1",
+        "minutes": 91
+      }
+    ],
+    "2025-11-15": [
+      {
+        "name": "Legs",
+        "minutes": 85
+      }
+    ],
+    "2025-11-18": [
+      {
+        "name": "Pull 1",
+        "minutes": 72
+      }
+    ],
+    "2025-11-20": [
+      {
+        "name": "Push 1",
+        "minutes": 52
+      }
+    ],
+    "2025-11-21": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 61
+      }
+    ],
+    "2025-11-22": [
+      {
+        "name": "Pull 1",
+        "minutes": 78
+      }
+    ],
+    "2025-11-23": [
+      {
+        "name": "Legs",
+        "minutes": 58
+      }
+    ],
+    "2025-11-26": [
+      {
+        "name": "Afternoon workout 💪",
+        "minutes": 47
+      }
+    ],
+    "2025-12-07": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 60
+      }
+    ],
+    "2025-12-09": [
+      {
+        "name": "Pull 1",
+        "minutes": 67
+      }
+    ],
+    "2025-12-11": [
+      {
+        "name": "Legs",
+        "minutes": 62
+      }
+    ],
+    "2025-12-12": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 62
+      }
+    ],
+    "2025-12-13": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 57
+      }
+    ],
+    "2025-12-14": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 58
+      }
+    ],
+    "2025-12-15": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 79
+      }
+    ],
+    "2025-12-16": [
+      {
+        "name": "Pull 1",
+        "minutes": 66
+      }
+    ],
+    "2025-12-27": [
+      {
+        "name": "Afternoon workout 💪",
+        "minutes": 61
+      }
+    ],
+    "2026-02-03": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 84
+      }
+    ],
+    "2026-02-04": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 69
+      }
+    ],
+    "2026-02-05": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 55
+      }
+    ],
+    "2026-02-09": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 110
+      }
+    ],
+    "2026-02-10": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 101
+      }
+    ],
+    "2026-02-11": [
+      {
+        "name": "Morning workout ☀️",
+        "minutes": 60
+      }
+    ],
+    "2026-02-24": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 90
+      }
+    ],
+    "2026-02-25": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 39
+      }
+    ],
+    "2026-02-26": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 85
+      }
+    ],
+    "2026-03-04": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 110
+      }
+    ],
+    "2026-03-05": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 103
+      }
+    ],
+    "2026-03-07": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 72
+      }
+    ],
+    "2026-03-09": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 76
+      }
+    ],
+    "2026-03-10": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 82
+      }
+    ],
+    "2026-03-23": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 59
+      }
+    ],
+    "2026-03-24": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 75
+      }
+    ],
+    "2026-03-26": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 63
+      }
+    ],
+    "2026-03-28": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 89
+      }
+    ],
+    "2026-03-30": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 71
+      }
+    ],
+    "2026-03-31": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 67
+      }
+    ],
+    "2026-04-02": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 101
+      }
+    ],
+    "2026-04-03": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 78
+      }
+    ],
+    "2026-04-05": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 105
+      }
+    ],
+    "2026-04-09": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 82
+      }
+    ],
+    "2026-04-13": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 66
+      }
+    ],
+    "2026-04-14": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 81
+      }
+    ],
+    "2026-05-28": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 60
+      }
+    ],
+    "2026-05-31": [
+      {
+        "name": "Late night workout 🌙",
+        "minutes": 88
+      }
+    ],
+    "2026-06-05": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 62
+      }
+    ],
+    "2026-08-31": [
+      {
+        "name": "Late night workout 🌙",
+        "minutes": 50
+      }
+    ],
+    "2026-09-02": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 34
+      }
+    ],
+    "2026-09-08": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 61
+      }
+    ],
+    "2026-09-09": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 54
+      }
+    ],
+    "2026-09-14": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 73
+      }
+    ],
+    "2026-09-18": [
+      {
+        "name": "Late night workout 🌙",
+        "minutes": 75
+      }
+    ],
+    "2026-09-19": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 79
+      }
+    ],
+    "2026-09-21": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 101
+      }
+    ],
+    "2026-09-22": [
+      {
+        "name": "Evening workout 🏋️",
+        "minutes": 58
+      }
+    ]
+  }
+}
