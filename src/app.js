@@ -22,6 +22,7 @@ import { analyzeInput, resolveDraft } from './analysis.js';
 import { rankCandidates, searchFoods } from './services/food-data-central.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
+import { mergeActivity, parseActivity } from './activity.js';
 
 const VALID_ROUTES = new Set(['today', 'add', 'library', 'progress', 'settings']);
 const HUEL_SEEDS = Object.freeze([
@@ -128,7 +129,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
   cryptoRef = globalThis.crypto, confirmFn = message => globalThis.confirm?.(message) ?? false,
-  pwaFactory = setupPwa, downloadFn = (name, contents) => {
+  pwaFactory = setupPwa, activityFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
     link.href = url;
@@ -942,7 +943,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         break;
       }
       case 'SET_TRAINING_DAY':
-        updateDatedMap('dayState', action.date, day => ({ ...(day ?? {}), trainingDay: Boolean(action.trainingDay) }));
+        updateDatedMap('dayState', action.date, day => ({ ...(day ?? {}), trainingDay: Boolean(action.trainingDay), trainingSource: 'manual' }));
         break;
       case 'SAVE_BODY_METRIC':
         saveBodyMetric(action.entry);
@@ -1282,6 +1283,33 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
   }
 
+  function isEditing() {
+    const active = documentRef?.activeElement;
+    const root = getRoot();
+    return Boolean(state.draft) || Boolean(active && typeof root?.contains === 'function' && root.contains(active)
+      && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName));
+  }
+
+  // Workout days published from Lift arrive in the background; like update notices, they never
+  // redraw while something is being edited. The next render shows them.
+  async function syncActivity() {
+    try {
+      const response = await activityFetch(activityUrl, { cache: 'no-store' });
+      if (!response?.ok) return false;
+      const activity = parseActivity(await response.text());
+      if (!activity) return false;
+      const { dayState, changed } = mergeActivity(store.get('dayState'), activity);
+      if (changed) store.set('dayState', dayState);
+      if (store.get('meta').activitySyncedAt !== activity.generatedAt) {
+        store.update('meta', meta => ({ ...meta, activitySyncedAt: activity.generatedAt }));
+      }
+      if (store.get('meta').onboardingComplete && !isEditing()) render();
+      return changed;
+    } catch {
+      return false;
+    }
+  }
+
   function showError(error, event) {
     const formAction = event?.type === 'submit' ? event.target.closest?.('form[data-action]')?.dataset?.action : null;
     state.notice = { form: formAction ?? null, tone: 'error', text: userMessage(error) };
@@ -1314,11 +1342,14 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         onInstall: available => { state.canInstall = available; refreshPwaRegions(); },
         onUpdate: ready => { state.updateReady = ready; refreshPwaRegions(); }
       });
+      documentRef?.addEventListener?.('visibilitychange', () => { if (documentRef.visibilityState === 'visible') syncActivity(); });
+      documentRef?.defaultView?.addEventListener?.('online', () => syncActivity());
     }
     render();
+    syncActivity();
   }
 
-  return { start, navigate, getState: () => clone(state), dispatch };
+  return { start, navigate, getState: () => clone(state), dispatch, syncActivity };
 }
 
 if (typeof document !== 'undefined' && typeof localStorage !== 'undefined') {
