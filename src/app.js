@@ -141,7 +141,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, coverageOpen: false, installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
@@ -902,6 +902,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         if (!NUTRIENTS.some(nutrient => nutrient.id === action.nutrientId)) {
           throw new Error(`Unknown nutrient: ${action.nutrientId}`);
         }
+        if (action.nutrientOrigin !== 'attention') state.coverageOpen = true;
         state.dialog = {
           kind: 'nutrientDetails',
           nutrientId: action.nutrientId,
@@ -1061,6 +1062,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         nutrientId: control.dataset.nutrientId,
         nutrientOrigin: control.dataset.nutrientOrigin
       });
+    }
+    if (control.dataset.action === 'toggle-coverage') {
+      state.coverageOpen = !state.coverageOpen;
+      render();
     }
     if (control.dataset.action === 'close-nutrient-details') {
       dispatch({ type: 'CLOSE_NUTRIENT_DETAILS' });
