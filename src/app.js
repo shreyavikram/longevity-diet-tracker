@@ -1225,6 +1225,11 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
               item
             });
           } else {
+            // "Save as a favorite" keeps a new meal in the Library; for a saved meal it only changes the flag,
+            // so a one-off edit while logging never rewrites the saved version.
+            const existing = store.get('library').find(candidate => candidate.id === item.id);
+            if (item.favorite && !existing) saveLibraryItem(item);
+            else if (existing && Boolean(existing.favorite) !== Boolean(item.favorite)) saveLibraryItem({ ...existing, favorite: Boolean(item.favorite) });
             dispatch({ type: 'LOG_ITEM', date: state.selectedDate, item, servings });
           }
           state.draft = null;

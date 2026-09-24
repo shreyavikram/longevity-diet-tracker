@@ -439,6 +439,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>
         <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
+        ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
         ${formNotice(ui, 'confirm-item')}
               <div class="stack">${item.type === 'supplement'
         ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
@@ -448,7 +449,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         <summary>Edit details</summary>
         ${recipeReview}
         <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
-        <div class="field-grid">${typeField}<label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label></div><label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Favorite</span></label>
+        <div class="field-grid">${typeField}<label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label></div>
         <section class="stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
         <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
       <section class="stack"><h2>Details and evidence</h2>

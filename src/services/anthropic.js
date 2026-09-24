@@ -128,7 +128,8 @@ async function callAnthropic({ settings, image, imageData, userText, fetchFn, si
   return anthropicText(payload);
 }
 
-const FALLBACK_GEMINI_MODEL = 'gemini-3.5-flash';
+// Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
+const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
 
 async function callGemini({ settings, image, imageData, userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT }) {
   const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
@@ -143,9 +144,11 @@ async function callGemini({ settings, image, imageData, userText, fetchFn, signa
     body,
     signal
   });
-  let response = await attempt(model);
-  // New models are often briefly overloaded; one retry on the previous Flash model usually succeeds.
-  if ([500, 503].includes(response.status) && model !== FALLBACK_GEMINI_MODEL) response = await attempt(FALLBACK_GEMINI_MODEL);
+  let response;
+  for (const name of [model, ...FALLBACK_GEMINI_MODELS.filter(fallback => fallback !== model)]) {
+    response = await attempt(name);
+    if (![429, 500, 503].includes(response.status)) break;
+  }
   if (!response.ok) {
     let error = {};
     try { error = (await response.json())?.error ?? {}; } catch { error = {}; }
