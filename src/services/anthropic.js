@@ -118,27 +118,37 @@ async function callAnthropic({ settings, image, imageData, userText, fetchFn, si
   return anthropicText(payload);
 }
 
+const FALLBACK_GEMINI_MODEL = 'gemini-3.5-flash';
+
 async function callGemini({ settings, image, imageData, userText, fetchFn, signal }) {
   const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
   const parts = [];
   if (image) parts.push({ inlineData: { mimeType: image.type, data: imageData } });
   parts.push({ text: userText });
-  const response = await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const body = JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts }],
+    generationConfig: { responseMimeType: 'application/json' } });
+  const attempt = name => fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(name)}:generateContent`, {
     method: 'POST',
     headers: { 'x-goog-api-key': settings.geminiApiKey, 'content-type': 'application/json' },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] }, contents: [{ role: 'user', parts }],
-      generationConfig: { responseMimeType: 'application/json' } }),
+    body,
     signal
   });
+  let response = await attempt(model);
+  // New models are often briefly overloaded; one retry on the previous Flash model usually succeeds.
+  if ([500, 503].includes(response.status) && model !== FALLBACK_GEMINI_MODEL) response = await attempt(FALLBACK_GEMINI_MODEL);
   if (!response.ok) {
-    let reason = '';
-    try { reason = JSON.stringify((await response.json())?.error?.details ?? ''); } catch { reason = ''; }
+    let error = {};
+    try { error = (await response.json())?.error ?? {}; } catch { error = {}; }
+    const reason = JSON.stringify(error.details ?? '');
     if (response.status === 403 || reason.includes('API_KEY_INVALID')) {
       throw new AnalysisError('auth', 'Gemini rejected the API key. Check it in Settings.');
     }
     if (response.status === 404) throw new AnalysisError('model', 'Gemini did not recognize the model name. Check it in Settings.');
     if (response.status === 429) throw new AnalysisError('rate_limit', 'The free Gemini limit is used up for now. Try again later or enter nutrition manually.');
-    throw new AnalysisError('service', 'Gemini analysis is unavailable. Try again or enter nutrition manually.');
+    const google = `${response.status}${error.status ? ` ${String(error.status).slice(0, 40)}` : ''}${error.message ? `: ${String(error.message).slice(0, 180)}` : ''}`;
+    throw new AnalysisError('service', response.status >= 500
+      ? `Gemini is busy or unavailable right now. Try again in a minute, or enter nutrition manually. Google said: ${google}`
+      : `Gemini could not run this analysis. Google said: ${google}`);
   }
   let payload;
   try { payload = await response.json(); } catch { throw invalid(); }

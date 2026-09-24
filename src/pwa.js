@@ -1,4 +1,4 @@
-export function setupPwa({ navigatorRef = globalThis.navigator, windowRef = globalThis.window,
+export function setupPwa({ navigatorRef = globalThis.navigator, windowRef = globalThis.window, documentRef = globalThis.document,
   onStatus = () => {}, onInstall = () => {}, onUpdate = () => {} } = {}) {
   let registration = null;
   let installEvent = null;
@@ -35,12 +35,15 @@ export function setupPwa({ navigatorRef = globalThis.navigator, windowRef = glob
     }
     try {
       registration = await serviceWorker.register('./sw.js');
+      const watch = worker => worker?.addEventListener?.('statechange', () => {
+        if (worker.state === 'installed' && serviceWorker.controller) onUpdate(true);
+      });
       if (registration.waiting && serviceWorker.controller) onUpdate(true);
-      registration.addEventListener('updatefound', () => {
-        const installing = registration.installing;
-        installing?.addEventListener('statechange', () => {
-          if (installing.state === 'installed' && serviceWorker.controller) onUpdate(true);
-        });
+      watch(registration.installing);
+      registration.addEventListener('updatefound', () => watch(registration.installing));
+      // A home-screen app usually resumes instead of reloading, so check for a new version whenever it returns.
+      documentRef?.addEventListener?.('visibilitychange', () => {
+        if (documentRef.visibilityState === 'visible') Promise.resolve(registration.update?.()).catch(() => {});
       });
       await serviceWorker.ready;
       onStatus('Offline access is ready on this device.');
