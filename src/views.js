@@ -355,45 +355,22 @@ function renderLibrary({ data, state }) {
   </section>`;
 }
 
-function usdaFoodSummary(food) {
-  const parts = [];
-  if (Number.isFinite(food.values?.calories)) parts.push(`${Math.round(food.values.calories)} kcal`);
-  if (Number.isFinite(food.values?.proteinG)) parts.push(`${Math.round(food.values.proteinG)} g protein`);
-  const basis = food.basis === 'perServing' ? `per ${food.servingSize} ${food.servingSizeUnit ?? 'serving'}` : 'per 100 g';
-  return parts.length ? `${parts.join(' · ')} ${basis}` : `Nutrition ${basis}`;
-}
-
-function renderUsdaSearch(usda) {
-  const search = `<form class="card stack" data-action="usda-search" role="search"><h2>Search USDA foods</h2><p class="muted">No AI and no key needed. Pick a food and an amount; nutrition comes straight from USDA FoodData Central.</p><label>Food<input name="query" type="search" autocomplete="off" required value="${escapeHtml(usda?.query ?? '')}" placeholder="firm tofu, cooked quinoa, banana"></label><button class="secondary-button" type="submit">Search USDA</button></form>`;
-  if (!usda) return search;
-  if (usda.status === 'loading') return `${search}<p class="card" role="status">Searching USDA.</p>`;
-  if (usda.status === 'error') return `${search}<p class="card" role="alert">${escapeHtml(usda.error)} Try again, or enter nutrition manually.</p>`;
-  if (!usda.foods.length) return `${search}<p class="card" role="status">No USDA foods matched "${escapeHtml(usda.query)}". Try fewer or simpler words.</p>`;
-  return `${search}<form class="card stack" data-action="usda-pick"><h2>Choose a USDA food</h2><fieldset class="stack"><legend>Results for "${escapeHtml(usda.query)}"</legend>${usda.foods.map(food => `<label class="choice inline-choice"><input type="radio" name="fdcId" value="${escapeHtml(food.fdcId)}" required><span>${escapeHtml(food.description)} <small>${escapeHtml(food.dataType)}${food.brand ? ` · ${escapeHtml(food.brand)}` : ''} · ${escapeHtml(usdaFoodSummary(food))}</small></span></label>`).join('')}</fieldset><label>Amount eaten (grams)<input name="grams" type="number" min="1" step="any" inputmode="decimal" required></label><p class="muted">No scale? Rough guides: 1 cup cooked grains or beans is about 185 g, 1 cup leafy greens about 30 g, 1 tablespoon oil or nut butter about 15 g, 1 medium banana about 120 g, a palm-sized piece of tofu about 100 g.</p><button class="primary-button" type="submit">Review nutrition</button></form>`;
-}
-
 function renderAdd({ data, state }) {
   const serviceName = analysisProvider(data.settings) === 'anthropic' ? 'Anthropic' : 'Google Gemini';
   const recent = sortedLibrary(data.library).filter(item => item.type !== 'supplement').slice(0, 5);
   const analysis = state.analysis;
   const analysisContent = analysis?.status === 'loading'
-    ? `<section class="card stack" role="status" aria-live="polite"><h2>Analyzing food</h2><p>Checking the description and food records. You can cancel at any time.</p><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel analysis</button></section>`
+    ? `<section class="card stack" role="status" aria-live="polite"><h2>Analyzing</h2><p>${escapeHtml(serviceName)} is reading your entry and checking USDA records. This usually takes a few seconds.</p><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></section>`
     : analysis?.status === 'needs_clarification'
-      ? `<form class="card stack" data-action="answer-clarification"><h2>A few details would help</h2><p class="muted">Only questions that may change the estimate are shown.</p>${analysis.questions.map(question => `<label>${escapeHtml(question.prompt)}${question.options?.length ? `<select name="${escapeHtml(question.id)}" required><option value="">Choose an ingredient</option>${question.options.map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('')}</select>` : `<input name="${escapeHtml(question.id)}" required>`}</label>`).join('')}${['foodPhoto', 'labelPhoto'].includes(analysis.kind) ? '<label>Reselect the photo for this request<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required></label><p class="muted">Photos are cleared after each request.</p>' : ''}<button class="primary-button" type="submit">Continue analysis</button><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></form>`
-      : analysis?.status === 'candidates'
-        ? `<form class="card stack" data-action="select-analysis-candidates"><h2>Choose food records</h2><p class="muted">Check each ingredient against the USDA description. Similar results need your choice.</p>${analysis.error ? `<p role="alert">${escapeHtml(analysis.error)}</p>` : ''}${analysis.draft.components.map((component, index) => `<fieldset class="stack"><legend>${escapeHtml(component.name)} · ${escapeHtml(component.householdAmount)} (${escapeHtml(component.estimatedGrams)} g)</legend>${component.candidates.length ? component.candidates.map(food => `<label class="choice inline-choice"><input type="radio" name="candidate_${index}" value="${escapeHtml(food.fdcId)}"${checked(food.fdcId === component.selectedFdcId)}><span>${escapeHtml(food.description)} <small>${escapeHtml(food.dataType)}${food.brand ? ` · ${escapeHtml(food.brand)}` : ''} · ${food.basis === 'perServing' ? `per ${escapeHtml(food.servingSize)} ${escapeHtml(food.servingSizeUnit ?? 'serving')}` : 'per 100 g'} · FDC ${escapeHtml(food.fdcId)}</small></span></label>`).join('') : `<p role="status">${component.lookupError ? escapeHtml(component.lookupError) : 'No USDA match found.'} Its nutrients will remain unknown unless you enter a label or manual value during review.</p>`}</fieldset>`).join('')}${analysis.draft.components.some(component => !component.candidates.length) ? '<button class="secondary-button" type="button" data-action="retry-usda">Retry USDA search</button>' : ''}<button class="primary-button" type="submit">Review nutrition</button><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></form>`
-        : analysis?.status === 'error'
-          ? `<section class="card stack" role="alert"><h2>Analysis could not finish</h2><p>${escapeHtml(analysis.error)}</p><form data-action="retry-analysis" class="stack">${['foodPhoto', 'labelPhoto'].includes(analysis.kind) ? '<label>Reselect the photo<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required></label>' : ''}<button class="secondary-button" type="submit">Try again</button></form><button class="quiet-button" type="button" data-action="cancel-analysis">Back to Add</button></section>`
-          : `<form class="card stack" data-action="analyze-food"><h2>Analyze a food or recipe</h2><label>Input type<select name="kind"><option value="description">Meal description</option><option value="recipe">Recipe</option><option value="foodPhoto">Food photo</option><option value="labelPhoto">Nutrition label photo</option></select></label><label>Description, ingredients, or package name<textarea name="text" rows="4" placeholder="What did you eat? Include amounts when known."></textarea></label><label>Photo for food or label analysis<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label><p class="muted">Analysis content goes directly to ${escapeHtml(serviceName)} and USDA from this browser. ${escapeHtml(serviceName)} receives the description or photo; USDA receives food search terms. Photos are used only for the active request.</p><button class="primary-button" type="submit">Analyze food</button></form>`;
+      ? `<form class="card stack" data-action="answer-clarification"><h2>One quick question</h2>${analysis.questions.map(question => `<label>${escapeHtml(question.prompt)}${question.options?.length ? `<select name="${escapeHtml(question.id)}" required><option value="">Choose an ingredient</option>${question.options.map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('')}</select>` : `<input name="${escapeHtml(question.id)}" required>`}</label>`).join('')}<button class="primary-button" type="submit">Continue</button><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></form>`
+      : analysis?.status === 'error'
+        ? `<section class="card stack" role="alert"><h2>Analysis could not finish</h2><p>${escapeHtml(analysis.error)}</p><form data-action="retry-analysis" class="stack"><button class="secondary-button" type="submit">Try again</button></form><button class="quiet-button" type="button" data-action="open-manual-entry">Enter nutrition manually</button><button class="quiet-button" type="button" data-action="cancel-analysis">Start over</button></section>`
+        : `<form class="card stack" data-action="analyze-food"><h2>What did you eat?</h2><label><span class="sr-only">Describe what you ate</span><textarea name="text" rows="3" placeholder="2 vegan sausages, a cup of brown rice, and broccoli roasted in a little olive oil"></textarea></label><label>Photo of the meal or its nutrition label (optional)<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label><button class="primary-button" type="submit">Analyze</button><p class="muted">Sent to ${escapeHtml(serviceName)} and USDA. Photos are not saved.</p></form>`;
   return `<section class="page stack" aria-labelledby="add-title">
     <div class="page-heading"><div><span class="eyebrow">${escapeHtml(dateLabel(state.selectedDate))}</span><h1 id="add-title">Add</h1></div></div>
-    <section class="hero-card"><span class="eyebrow">Works offline</span><h2>Log what you know</h2><p>Use a saved item or enter label and nutrition details manually. Unknown nutrients stay unknown.</p></section>
-    <section class="card stack" aria-labelledby="saved-heading"><h2 id="saved-heading">Favorites and recent items</h2>${recent.length ? `<ul class="plain-list">${recent.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.servingLabel)}</small></span><button class="secondary-button" type="button" data-action="open-library-item" data-item-id="${escapeHtml(item.id)}">Review</button></li>`).join('')}</ul>` : '<p class="muted">Your reusable items will appear here.</p>'}</section>
-    ${renderUsdaSearch(state.usda)}
-    <button class="primary-button full-width" type="button" data-action="open-manual-entry">Enter nutrition manually</button>
     ${analysisContent}
-    <section class="card stack" aria-labelledby="scheduled-heading"><h2 id="scheduled-heading">Scheduled supplements</h2>${renderSupplementSchedule(data, state.selectedDate)}</section>
-    <section class="card stack" aria-labelledby="selected-log"><h2 id="selected-log">Entries for ${escapeHtml(dateLabel(state.selectedDate))}</h2>${renderLogEntries(data, state.selectedDate)}</section>
+    <section class="card stack" aria-labelledby="saved-heading"><h2 id="saved-heading">Favorites and recent items</h2>${recent.length ? `<ul class="plain-list">${recent.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.servingLabel)}</small></span><button class="secondary-button" type="button" data-action="open-library-item" data-item-id="${escapeHtml(item.id)}">Review</button></li>`).join('')}</ul>` : '<p class="muted">Your reusable items will appear here.</p>'}</section>
+    <button class="quiet-button full-width" type="button" data-action="open-manual-entry">Enter nutrition manually</button>
   </section>`;
 }
 
@@ -416,6 +393,25 @@ function nutrientInput(definition, item) {
   </fieldset>`;
 }
 
+function macroLine(perServing = {}) {
+  const parts = MACRO_NUTRIENTS.map(definition => {
+    const value = nutrientValue(perServing, definition);
+    const label = definition.key === 'calories' ? '' : ` ${definition.label.toLocaleLowerCase('en-US')}`;
+    return Number.isFinite(value) ? `${formatNutrient(value, definition.unit)}${label}` : `${definition.label.toLocaleLowerCase('en-US')} unknown`;
+  });
+  return parts.join(' · ');
+}
+
+function sourceNote(item) {
+  const sources = new Set(Object.values(item.provenance ?? {}).flatMap(record => record.contributors?.length
+    ? record.contributors.map(contributor => contributor.source) : [record.source]));
+  if (sources.has('usdaBranded')) sources.add('usda');
+  const names = [['label', 'the product label'], ['usda', 'USDA records'], ['ai', 'AI estimates'],
+    ['manual', 'your entries'], ['saved', 'saved items']].filter(([id]) => sources.has(id)).map(([, name]) => name);
+  if (!names.length) return '';
+  return `Based on ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}.`;
+}
+
 function renderConfirmation({ data, state, ui = {} }) {
   const draft = state.draft;
   const item = draft.item;
@@ -434,29 +430,33 @@ function renderConfirmation({ data, state, ui = {} }) {
   const labelBasisText = analysisReview?.labelBasis
     ? `<p><strong>Label serving basis${analysisReview.labelBasis.componentName ? ` for ${escapeHtml(analysisReview.labelBasis.componentName)}` : ''}:</strong> ${escapeHtml(analysisReview.labelBasis.printedServingGrams)} g printed label serving to ${escapeHtml(editableNumber(analysisReview.labelBasis.trackedServingGrams))} g tracked serving of that ingredient (${escapeHtml(Number(analysisReview.labelBasis.scaleFactor.toPrecision(4)))}× label values).</p>`
     : '';
-  const recipeReview = analysisReview ? `<section class="card stack" aria-labelledby="analysis-review-title"><h2 id="analysis-review-title">Calculation review</h2><p>${item.type === 'recipe' ? `Recipe total for ${escapeHtml(analysisReview.totalServings)} servings from these ingredients:` : 'Analyzed components:'}</p><ul class="review-list">${analysisReview.components.map((component, index) => `<li>${escapeHtml(component.name)} ${escapeHtml(editableNumber(component.grams))} g from ${analysisReview.labelBasis?.componentIndex === index ? 'Product label + ' : ''}${escapeHtml(component.source)}</li>`).join('')}</ul>${labelBasisText}${item.type === 'recipe' ? `<div class="field-grid"><div><strong>Total recipe</strong><p>${escapeHtml(nutrientSummary(analysisReview.recipeTotal))}</p></div><div><strong>Per serving</strong><p>${escapeHtml(nutrientSummary(item.perServing))}</p></div></div>` : ''}</section>` : '';
+  const recipeReview = analysisReview ? `<section class="stack" aria-labelledby="analysis-review-title"><h2 id="analysis-review-title">Calculation review</h2><p>${item.type === 'recipe' ? `Recipe total for ${escapeHtml(analysisReview.totalServings)} servings from these ingredients:` : 'Analyzed components:'}</p><ul class="review-list">${analysisReview.components.map((component, index) => `<li>${escapeHtml(component.name)} ${escapeHtml(editableNumber(component.grams))} g from ${analysisReview.labelBasis?.componentIndex === index ? 'Product label + ' : ''}${escapeHtml(component.source)}</li>`).join('')}</ul>${labelBasisText}${item.type === 'recipe' ? `<div class="field-grid"><div><strong>Total recipe</strong><p>${escapeHtml(nutrientSummary(analysisReview.recipeTotal))}</p></div><div><strong>Per serving</strong><p>${escapeHtml(nutrientSummary(item.perServing))}</p></div></div>` : ''}</section>` : '';
   return `<section class="page stack" aria-labelledby="confirmation-title">
     <div class="page-heading"><div><span class="eyebrow">Review before saving</span><h1 id="confirmation-title">Confirm nutrition</h1></div><button class="quiet-button" type="button" data-action="close-confirmation">Close</button></div>
     <form class="stack" data-action="confirm-item">
-      ${recipeReview}
-      <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
-      <section class="card stack"><h2>Item and serving</h2><div class="field-grid">
+      <section class="card stack review-summary">
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
-        ${typeField}
-        <label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label>
-        <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required><small>Use the stepper or type an amount.</small></label>
-      </div><label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Favorite</span></label></section>
-      <section class="card stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
-      <section class="card stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
-      <section class="card stack"><h2>Details and evidence</h2>
+        <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>
+        <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
+        ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
+        ${formNotice(ui, 'confirm-item')}
+              <div class="stack">${item.type === 'supplement'
+        ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
+        : `<button class="primary-button full-width" type="submit" name="intent" value="log">${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}<button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button></div>
+      </section>
+      <details class="card stack review-details"${draft.mode === 'manual' ? ' open' : ''}>
+        <summary>Edit details</summary>
+        ${recipeReview}
+        <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
+        <div class="field-grid">${typeField}<label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label></div><label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Favorite</span></label>
+        <section class="stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
+        <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
+      <section class="stack"><h2>Details and evidence</h2>
         <label>Ingredient or component breakdown<textarea name="components" rows="4" placeholder="One component per line">${escapeHtml(components)}</textarea></label>
         <label>Assumptions<textarea name="assumptions" rows="3" placeholder="One assumption per line">${escapeHtml(assumptions)}</textarea></label>
       </section>
-${item.type === 'supplement' ? `<section class="card stack"><h2>Supplement schedule</h2><p class="muted">For supplements, enter exact label amounts above and choose when you plan to take this product.</p><label>Frequency<select name="scheduleFrequency"><option value="daily"${selected(item.schedule?.frequency, 'daily')}>Daily</option><option value="weekly"${selected(item.schedule?.frequency, 'weekly')}>Weekly</option><option value="custom"${selected(item.schedule?.frequency, 'custom')}>Custom days</option></select></label><fieldset><legend>Scheduled days</legend><div class="check-grid">${WEEKDAYS.map((day, index) => `<label class="choice inline-choice"><input type="checkbox" name="scheduleDays" value="${index}"${checked(item.schedule?.days?.includes(index))}><span>${day}</span></label>`).join('')}</div></fieldset></section>` : ''}
-      ${formNotice(ui, 'confirm-item')}
-      <div class="stack"><button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button>${item.type === 'supplement'
-        ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
-        : `<button class="primary-button full-width" type="submit" name="intent" value="log">${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}</div>
+${item.type === 'supplement' ? `<section class="stack"><h2>Supplement schedule</h2><p class="muted">For supplements, enter exact label amounts above and choose when you plan to take this product.</p><label>Frequency<select name="scheduleFrequency"><option value="daily"${selected(item.schedule?.frequency, 'daily')}>Daily</option><option value="weekly"${selected(item.schedule?.frequency, 'weekly')}>Weekly</option><option value="custom"${selected(item.schedule?.frequency, 'custom')}>Custom days</option></select></label><fieldset><legend>Scheduled days</legend><div class="check-grid">${WEEKDAYS.map((day, index) => `<label class="choice inline-choice"><input type="checkbox" name="scheduleDays" value="${index}"${checked(item.schedule?.days?.includes(index))}><span>${day}</span></label>`).join('')}</div></fieldset></section>` : ''}
+      </details>
     </form>
   </section>`;
 }

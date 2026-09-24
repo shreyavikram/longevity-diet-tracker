@@ -1,4 +1,4 @@
-import { requestAnalysis, AnalysisError } from './services/anthropic.js';
+import { requestAnalysis, requestMatchChoice, AnalysisError } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
 import { MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
 
@@ -94,8 +94,9 @@ export function resolveDraft(draft, selections = {}) {
     const scaledUsda = selected ? Object.fromEntries(Object.entries(selected.values).map(([key, value]) => [key, value * factor])) : {};
     const scaledLabel = hasLabelValues && index === labelComponentIndex
       ? Object.fromEntries(Object.entries(labelValues).map(([key, value]) => [key, value * component.estimatedGrams / draft.labelServingGrams])) : {};
+    const fallback = !selected && component.fallbackNutrients ? component.fallbackNutrients : undefined;
     const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined,
-      label: Object.keys(scaledLabel).length ? scaledLabel : undefined });
+      label: Object.keys(scaledLabel).length ? scaledLabel : undefined, ai: fallback });
     for (const [key, value] of Object.entries(merged.values)) {
       recipeTotal[key] = (recipeTotal[key] ?? 0) + value;
       reportedBy[key] = (reportedBy[key] ?? 0) + 1;
@@ -116,8 +117,8 @@ export function resolveDraft(draft, selections = {}) {
   const assumptions = [...(draft.assumptions ?? [])];
   if (basisNote && !assumptions.includes(basisNote)) assumptions.push(basisNote);
   return { ...draft, labelComponentIndex, components, assumptions, labelBasis, recipeTotal: nested(recipeTotal), perServing, provenance,
-    pendingCandidates: components.flatMap((component, index) =>
-      component.candidates.length && !component.candidates.some(food => String(food.fdcId) === String(component.selectedFdcId)) ? [index] : []) };
+    pendingCandidates: components.flatMap((component, index) => component.matchResolved
+      || !component.candidates.length || component.candidates.some(food => String(food.fdcId) === String(component.selectedFdcId)) ? [] : [index]) };
 }
 
 function answeredNumber(history, id, unitPattern) {
@@ -149,18 +150,19 @@ function labelComponentQuestion(components) {
 export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal });
   if (parsed.status === 'needs_clarification') return parsed;
+  const labelKind = kind === 'labelPhoto' || (kind === 'auto' && Boolean(image));
   if (kind === 'recipe' && !parsed.totalServings) {
     const answered = answeredNumber(clarificationHistory, 'totalServings', 'servings?');
     if (!answered) return { status: 'needs_clarification', questions: [{ id: 'totalServings', prompt: 'How many servings does the full recipe make?' }] };
     parsed.totalServings = answered;
   }
-  if (kind === 'labelPhoto' && Object.keys(parsed.labelNutrients ?? {}).length
+  if (labelKind && Object.keys(parsed.labelNutrients ?? {}).length
     && (!Number.isFinite(parsed.labelServingGrams) || parsed.labelServingGrams <= 0)) {
     const answered = answeredNumber(clarificationHistory, 'labelServingGrams', 'g|grams?');
     if (!answered) return { status: 'needs_clarification', questions: [{ id: 'labelServingGrams', prompt: 'How many grams are in one printed label serving?' }] };
     parsed.labelServingGrams = answered;
   }
-  if (kind === 'labelPhoto' && Object.keys(parsed.labelNutrients ?? {}).length) {
+  if (labelKind && Object.keys(parsed.labelNutrients ?? {}).length) {
     const identities = parsed.components.map(componentIdentity);
     const lastIdentity = clarificationHistory.findLastIndex(item => item.id === 'labelComponentIdentity');
     const lastDetail = clarificationHistory.findLastIndex(item => item.id === 'labelComponentDetail');
@@ -188,9 +190,17 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
       if (!(error instanceof AnalysisError)) throw error;
       lookupError = error.message;
     }
-    components.push({ ...component, candidates: candidates.slice(0, 5), selectedFdcId: candidates.length === 1 ? candidates[0].fdcId : null,
+    components.push({ ...component, candidates: candidates.slice(0, 8), selectedFdcId: null, matchResolved: true,
       ...(lookupError ? { lookupError } : {}) });
   }
+  // The AI picks each ingredient's USDA record; if that step fails, its own estimates stand in.
+  let choices = new Map();
+  try {
+    choices = await requestMatchChoice({ components, settings, fetchFn, signal });
+  } catch (error) {
+    if (error.code === 'cancelled') throw error;
+  }
+  for (const [index, component] of components.entries()) component.selectedFdcId = choices.get(index) ?? null;
   const draft = resolveDraft({
     kind,
     name: parsed.name,

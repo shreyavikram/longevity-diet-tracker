@@ -18,8 +18,8 @@ import {
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
 import { renderApp, renderInstallStatus, renderUpdateBanner } from './views.js';
-import { analyzeInput, resolveDraft } from './analysis.js';
-import { rankCandidates, searchFoods } from './services/food-data-central.js';
+import { analyzeInput } from './analysis.js';
+import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
 import { mergeActivity, parseActivity } from './activity.js';
@@ -142,27 +142,57 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, coverageOpen: false, usda: null, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, coverageOpen: false, installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
   let pendingNutrientFocus = null;
   let analysisController = null;
   let analysisGeneration = 0;
+  let analysisImage = null;
   let pwa = null;
 
   function cancelAnalysis() {
     analysisGeneration += 1;
+    analysisImage = null;
     analysisController?.abort();
     analysisController = null;
     state.analysis = null;
     render();
   }
 
-  function openAnalysisReview(result) {
+  // What the person entered and what the AI estimated, kept with the saved item so estimates can be
+  // compared later with what was actually logged. Photos are never stored, only whether one was used.
+  function analysisRecord(result, input) {
+    const settings = store.get('settings');
+    const provider = analysisProvider(settings);
+    return {
+      analyzedAt: clock().toISOString(),
+      provider,
+      model: provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
+      input: { text: input.text, hadPhoto: Boolean(input.hadPhoto) },
+      clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
+      estimate: {
+        name: result.name,
+        servingLabel: result.servingLabel,
+        totalServings: result.totalServings ?? 1,
+        confidence: result.confidence,
+        assumptions: clone(result.assumptions ?? []),
+        components: result.components.map(component => {
+          const matched = component.candidates.find(food => String(food.fdcId) === String(component.selectedFdcId));
+          return { name: component.name, householdAmount: component.householdAmount, estimatedGrams: component.estimatedGrams,
+            usdaSearch: component.usdaSearch, ...(component.fallbackNutrients ? { fallbackNutrients: clone(component.fallbackNutrients) } : {}),
+            matched: matched ? { fdcId: matched.fdcId, description: matched.description } : null };
+        }),
+        perServing: clone(result.perServing)
+      }
+    };
+  }
+
+  function openAnalysisReview(result, input = {}) {
     const item = {
       id: null,
-      type: result.kind === 'recipe' ? 'recipe' : result.kind === 'labelPhoto' ? 'packaged' : 'meal',
+      type: result.kind === 'recipe' || result.totalServings > 1 ? 'recipe' : result.labelBasis ? 'packaged' : 'meal',
       name: result.name,
       servingLabel: result.servingLabel,
       perServing: result.perServing,
@@ -171,75 +201,45 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       assumptions: result.assumptions,
       components: result.components.map(component => ({ name: `${component.name}: ${component.householdAmount} (${component.estimatedGrams} g)` })),
       favorite: false,
-      verified: false
+      verified: false,
+      analysis: analysisRecord(result, input)
     };
     state.draft = { kind: 'confirmation', mode: 'analysis', servings: 1, item, analysisReview: {
       totalServings: result.totalServings,
       recipeTotal: result.recipeTotal,
       labelBasis: result.labelBasis,
       components: result.components.map(component => ({ name: component.name, grams: component.estimatedGrams,
-        source: component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'No USDA match' }))
+        source: component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
     } };
     state.analysis = null;
     render();
   }
 
-  async function startAnalysis({ kind, text, image, clarificationHistory = [] } = {}) {
+  async function startAnalysis({ kind = 'auto', text, image, clarificationHistory = [] } = {}) {
     analysisController?.abort();
     const generation = ++analysisGeneration;
     analysisController = new AbortController();
-    const input = { kind, text: String(text ?? ''), clarificationHistory };
+    // The photo stays in memory only for this analysis (including follow-up questions), never in state or storage.
+    if (image !== undefined) analysisImage = image || null;
+    const input = { kind, text: String(text ?? ''), clarificationHistory, hadPhoto: Boolean(analysisImage) };
     state.analysis = { status: 'loading', ...input };
     render();
     try {
-      const result = await analyzeInput({ ...input, image, settings: store.get('settings'),
+      const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
         trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal });
       if (generation !== analysisGeneration) return;
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
-      } else if (result.draft.pendingCandidates.length || result.draft.components.some(component => !component.candidates.length)) {
-        state.analysis = { status: 'candidates', ...input, draft: result.draft };
-      } else openAnalysisReview(result.draft);
-      render();
+        render();
+      } else {
+        analysisImage = null;
+        openAnalysisReview(result.draft, input);
+      }
     } catch (error) {
       if (generation !== analysisGeneration) return;
       state.analysis = { status: 'error', ...input,
         error: error?.name === 'AnalysisError' ? error.message : 'Analysis is unavailable. Try again or enter nutrition manually.' };
       render();
-    } finally {
-      if (generation === analysisGeneration) analysisController = null;
-      image = undefined;
-    }
-  }
-
-  async function retryFoodSearch() {
-    if (state.analysis?.status !== 'candidates') return;
-    const previous = state.analysis;
-    const generation = ++analysisGeneration;
-    const controller = new AbortController();
-    analysisController = controller;
-    state.analysis = { status: 'loading', kind: previous.kind, text: previous.text,
-      clarificationHistory: previous.clarificationHistory };
-    render();
-    try {
-      const components = [];
-      for (const component of previous.draft.components) {
-        if (component.candidates.length) { components.push(component); continue; }
-        try {
-          const candidates = rankCandidates(component, await searchFoods(component.usdaSearch,
-            store.get('settings').foodDataCentralApiKey, fetchFn, { signal: controller.signal })).slice(0, 5);
-          components.push({ ...component, candidates, selectedFdcId: candidates.length === 1 ? candidates[0].fdcId : null, lookupError: undefined });
-        } catch (error) {
-          if (controller.signal.aborted) return;
-          components.push({ ...component, lookupError: error?.name === 'AnalysisError' ? error.message : 'USDA food search is unavailable.' });
-        }
-      }
-      if (generation !== analysisGeneration) return;
-      const draft = resolveDraft({ ...previous.draft, components });
-      if (draft.pendingCandidates.length || components.some(component => !component.candidates.length)) {
-        state.analysis = { ...previous, draft };
-        render();
-      } else openAnalysisReview(draft);
     } finally {
       if (generation === analysisGeneration) analysisController = null;
     }
@@ -455,7 +455,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       provenance: canonical.provenance,
       confidence: canonical.confidence ?? null,
       assumptions: clone(canonical.assumptions ?? []),
-      components: clone(canonical.components ?? [])
+      components: clone(canonical.components ?? []),
+      ...(canonical.analysis ? { analysis: clone(canonical.analysis) } : {})
     };
   }
 
@@ -619,7 +620,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       assumptions: lines(formData.get('assumptions')),
       components: lines(formData.get('components')).map(component => ({ name: component })),
       favorite: formData.has('favorite'),
-      verified: knownProvenance.length > 0 && knownProvenance.every(record => record.source === 'label')
+      verified: knownProvenance.length > 0 && knownProvenance.every(record => record.source === 'label'),
+      ...(state.draft?.item?.analysis ? { analysis: clone(state.draft.item.analysis) } : {})
     };
     if (type === 'supplement') {
       const frequency = ['daily', 'weekly', 'custom'].includes(formData.get('scheduleFrequency'))
@@ -657,7 +659,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         provenance: clone(entry.provenance ?? {}),
         confidence: entry.confidence,
         assumptions: clone(entry.assumptions ?? []),
-        components: clone(entry.components ?? [])
+        components: clone(entry.components ?? []),
+        ...(entry.analysis ? { analysis: clone(entry.analysis) } : {})
       }
     };
   }
@@ -985,7 +988,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     state.draft = null;
     state.notice = null;
     state.dataStatus = '';
-    state.usda = null;
     render();
     resetScroll();
     focusHeading();
@@ -1000,7 +1002,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'apply-update') dispatch({ type: 'APPLY_UPDATE' });
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
-    if (control.dataset.action === 'retry-usda') return retryFoodSearch();
     if (['open-library-item', 'edit-library-item'].includes(control.dataset.action)) {
       dispatch({ type: 'OPEN_LIBRARY_ITEM', itemId: control.dataset.itemId });
     }
@@ -1132,53 +1133,18 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           render();
         });
       }
-      case 'usda-search': {
-        const query = String(formData.get('query') ?? '').trim();
-        if (!query) return;
-        state.usda = { status: 'loading', query };
-        render();
-        return searchFoods(query, store.get('settings').foodDataCentralApiKey, fetchFn)
-          .then(foods => { state.usda = { status: 'results', query, foods: rankCandidates({ name: query, usdaSearch: query }, foods).slice(0, 8) }; })
-          .catch(error => { state.usda = { status: 'error', query, error: error?.name === 'AnalysisError' ? error.message : 'USDA food search is unavailable.' }; })
-          .finally(() => render());
-      }
-      case 'usda-pick': {
-        const food = state.usda?.foods?.find(candidate => String(candidate.fdcId) === String(formData.get('fdcId')));
-        const grams = Number(formData.get('grams'));
-        if (!food || !Number.isFinite(grams) || grams <= 0) throw new TypeError('Choose a food and enter an amount in grams.');
-        const amount = `${Number(grams.toPrecision(6))} g`;
-        const resolved = resolveDraft({ kind: 'description', name: food.description, servingLabel: amount, confidence: 'high', assumptions: [],
-          totalServings: 1, labelNutrients: {}, labelServingGrams: null,
-          components: [{ name: food.description, householdAmount: amount, estimatedGrams: grams, usdaSearch: state.usda.query,
-            confidence: 'high', candidates: [food], selectedFdcId: food.fdcId }] });
-        state.usda = null;
-        openAnalysisReview(resolved);
-        return;
-      }
       case 'analyze-food':
-        return startAnalysis({ kind: formData.get('kind'), text: formData.get('text'), image: formData.get('image')?.size ? formData.get('image') : null });
+        return startAnalysis({ kind: 'auto', text: formData.get('text'), image: formData.get('image')?.size ? formData.get('image') : null });
       case 'retry-analysis':
         if (state.analysis?.status === 'error') return startAnalysis({ kind: state.analysis.kind, text: state.analysis.text,
-          clarificationHistory: state.analysis.clarificationHistory, image: formData.get('image')?.size ? formData.get('image') : null });
+          clarificationHistory: state.analysis.clarificationHistory });
         return;
       case 'answer-clarification': {
         const current = state.analysis;
         if (current?.status !== 'needs_clarification') return;
         const clarificationHistory = [...(current.clarificationHistory ?? []), ...current.questions.map(question =>
           ({ id: question.id, prompt: question.prompt, answer: String(formData.get(question.id) ?? '').trim() }))];
-        return startAnalysis({ kind: current.kind, text: current.text, clarificationHistory,
-          image: formData.get('image')?.size ? formData.get('image') : null });
-      }
-      case 'select-analysis-candidates': {
-        if (state.analysis?.status !== 'candidates') return;
-        const selections = Object.fromEntries(state.analysis.draft.components.map((component, index) =>
-          [index, formData.get(`candidate_${index}`)]).filter(([, value]) => value));
-        const resolved = resolveDraft(state.analysis.draft, selections);
-        if (resolved.pendingCandidates.length) {
-          state.analysis = { ...state.analysis, error: 'Choose a food record for each matched ingredient, or use manual entry.' };
-          render();
-        } else openAnalysisReview(resolved);
-        return;
+        return startAnalysis({ kind: current.kind, text: current.text, clarificationHistory });
       }
       case 'save-profile':
         dispatch({ type: 'SAVE_PROFILE', profile: profileFromForm(formData, store.get('profile')) });
