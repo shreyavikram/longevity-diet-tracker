@@ -129,9 +129,11 @@ async function callAnthropic({ settings, image, imageData, userText, fetchFn, si
 }
 
 // Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
-const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
+const RETRY_AFTER_MS = 3000;
+const defaultWait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function callGemini({ settings, image, imageData, userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT }) {
+async function callGemini({ settings, image, imageData, userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait }) {
   const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
   const parts = [];
   if (image) parts.push({ inlineData: { mimeType: image.type, data: imageData } });
@@ -144,11 +146,26 @@ async function callGemini({ settings, image, imageData, userText, fetchFn, signa
     body,
     signal
   });
+  // Google's free models are often overloaded at peak times. Try each in turn (an older fallback the key
+  // cannot use answers 404 and is skipped), then pause briefly and try the two newest once more.
+  const chain = [model, ...FALLBACK_GEMINI_MODELS.filter(fallback => fallback !== model)];
+  const tried = [];
   let response;
-  for (const name of [model, ...FALLBACK_GEMINI_MODELS.filter(fallback => fallback !== model)]) {
-    response = await attempt(name);
-    if (![429, 500, 503].includes(response.status)) break;
+  let lastFailure;
+  rounds: for (let round = 0; round < 2; round += 1) {
+    if (round) {
+      await wait(RETRY_AFTER_MS);
+      if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
+    }
+    for (const name of round ? chain.slice(0, 2) : chain) {
+      response = await attempt(name);
+      if (!tried.includes(name)) tried.push(name);
+      if (response.status === 404 && name !== model) continue;
+      if (![429, 500, 503].includes(response.status)) break rounds;
+      lastFailure = response;
+    }
   }
+  if (!response.ok && lastFailure && [404].includes(response.status)) response = lastFailure;
   if (!response.ok) {
     let error = {};
     try { error = (await response.json())?.error ?? {}; } catch { error = {}; }
@@ -160,7 +177,7 @@ async function callGemini({ settings, image, imageData, userText, fetchFn, signa
     if (response.status === 429) throw new AnalysisError('rate_limit', 'The free Gemini limit is used up for now. Try again later or enter nutrition manually.');
     const google = `${response.status}${error.status ? ` ${String(error.status).slice(0, 40)}` : ''}${error.message ? `: ${String(error.message).slice(0, 180)}` : ''}`;
     throw new AnalysisError('service', response.status >= 500
-      ? `Gemini is busy or unavailable right now. Try again in a minute, or enter nutrition manually. Google said: ${google}`
+      ? `Gemini is busy or unavailable right now. Try again in a minute, or add a favorite or enter nutrition manually. Tried ${tried.join(', ')}. Google said: ${google}`
       : `Gemini could not run this analysis. Google said: ${google}`);
   }
   let payload;
@@ -168,7 +185,7 @@ async function callGemini({ settings, image, imageData, userText, fetchFn, signa
   return geminiText(payload);
 }
 
-export async function requestAnalysis({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal }) {
+export async function requestAnalysis({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
   if (!VALID_KINDS.has(kind)) throw new AnalysisError('invalid_input', 'Choose a supported analysis type.');
   const provider = analysisProvider(settings);
   if (provider === 'gemini' && !settings?.geminiApiKey) throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
@@ -187,7 +204,7 @@ export async function requestAnalysis({ kind, text = '', image, clarificationHis
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients });
     const call = provider === 'gemini' ? callGemini : callAnthropic;
-    const parsed = parseResponse(await call({ settings, image, imageData, userText, fetchFn, signal }));
+    const parsed = parseResponse(await call({ settings, image, imageData, userText, fetchFn, signal, wait }));
     const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && Boolean(image));
     if (!labelAllowed && (parsed.labelNutrients !== undefined || parsed.labelServingGrams !== undefined || parsed.labelComponentIndex !== undefined)) throw invalid();
     return parsed;
@@ -202,7 +219,7 @@ export async function requestAnalysis({ kind, text = '', image, clarificationHis
 
 // Asks the configured AI service to pick each ingredient's USDA record, so the person never has to.
 // Resolves a Map of component index to fdcId (or null when nothing fits).
-export async function requestMatchChoice({ components, settings, fetchFn = globalThis.fetch, signal }) {
+export async function requestMatchChoice({ components, settings, fetchFn = globalThis.fetch, signal, wait }) {
   const provider = analysisProvider(settings);
   const listed = components.map((component, index) => ({ component: index, name: component.name, amount: component.householdAmount,
     candidates: component.candidates.map(food => ({ fdcId: food.fdcId, description: food.description, type: food.dataType,
@@ -211,7 +228,7 @@ export async function requestMatchChoice({ components, settings, fetchFn = globa
   try {
     const call = provider === 'gemini' ? callGemini : callAnthropic;
     const raw = String(await call({ settings, image: null, imageData: null, userText: JSON.stringify({ ingredients: listed }),
-      fetchFn, signal, systemPrompt: MATCH_PROMPT })).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      fetchFn, signal, wait, systemPrompt: MATCH_PROMPT })).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     let parsed;
     try { parsed = JSON.parse(raw); } catch { throw invalid(); }
     if (!exactKeys(parsed, ['choices']) || !Array.isArray(parsed.choices)) throw invalid();

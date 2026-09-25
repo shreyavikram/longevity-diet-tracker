@@ -147,8 +147,8 @@ function labelComponentQuestion(components) {
       label: `${component.name}, ${component.householdAmount} (${component.estimatedGrams} g)` })) }] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal }) {
-  const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal });
+export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
+  const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   const labelKind = kind === 'labelPhoto' || (kind === 'auto' && Boolean(image));
   if (kind === 'recipe' && !parsed.totalServings) {
@@ -196,7 +196,7 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
   // The AI picks each ingredient's USDA record; if that step fails, its own estimates stand in.
   let choices = new Map();
   try {
-    choices = await requestMatchChoice({ components, settings, fetchFn, signal });
+    choices = await requestMatchChoice({ components, settings, fetchFn, signal, wait });
   } catch (error) {
     if (error.code === 'cancelled') throw error;
   }

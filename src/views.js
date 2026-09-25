@@ -360,7 +360,7 @@ function renderAdd({ data, state }) {
   const recent = sortedLibrary(data.library).filter(item => item.type !== 'supplement').slice(0, 5);
   const analysis = state.analysis;
   const analysisContent = analysis?.status === 'loading'
-    ? `<section class="card stack" role="status" aria-live="polite"><h2>Analyzing</h2><p>${escapeHtml(serviceName)} is reading your entry and checking USDA records. This usually takes a few seconds.</p><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></section>`
+    ? `<section class="card stack" role="status" aria-live="polite"><h2>Analyzing</h2><p>${escapeHtml(serviceName)} is reading your entry and checking USDA records. This usually takes a few seconds, or up to 15 when Gemini is busy.</p><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></section>`
     : analysis?.status === 'needs_clarification'
       ? `<form class="card stack" data-action="answer-clarification"><h2>One quick question</h2>${analysis.questions.map(question => `<label>${escapeHtml(question.prompt)}${question.options?.length ? `<select name="${escapeHtml(question.id)}" required><option value="">Choose an ingredient</option>${question.options.map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('')}</select>` : `<input name="${escapeHtml(question.id)}" required>`}</label>`).join('')}<button class="primary-button" type="submit">Continue</button><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></form>`
       : analysis?.status === 'error'
