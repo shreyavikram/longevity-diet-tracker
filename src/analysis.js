@@ -1,7 +1,7 @@
 import { requestAnalysis, requestMatchChoice, AnalysisError } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
 import { MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
-import { parseNutritionLabel } from './nutrition-label.js';
+import { parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
 
 const MICROS = new Set(NUTRIENTS.filter(item => item.group === 'micros').map(item => item.key));
 const CANONICAL = new Set([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => item.key));
@@ -206,24 +206,32 @@ function labelTextDraft(label, text) {
     labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
+export async function analyzeInput({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
   const typedLabel = parseNutritionLabel(text);
   if (typedLabel) return { status: 'estimate', draft: labelTextDraft(typedLabel, text) };
+  // Numbers she typed (in the entry or an answer) override the label, USDA, and the AI for those nutrients.
+  const typed = statedNutrientsFromText([text, ...clarificationHistory.map(item => item.answer)].join('\n'));
   // How the on-device reader did, kept with the entry so slow or failed reads on the phone can be checked later.
   let labelReader = null;
-  if (image && recognizeText && !clarificationHistory.length) {
+  if (images.length && recognizeText && !clarificationHistory.length) {
     onStage('reading-label');
     const started = Date.now();
-    let recognized = '';
+    const texts = [];
     let failure = null;
-    try { recognized = await recognizeText(image, { signal }); } catch (error) { failure = String(error?.message ?? error).slice(0, 200); }
-    if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
-    const photoLabel = parseNutritionLabel(recognized);
-    labelReader = { ms: Date.now() - started, found: Boolean(photoLabel), characters: recognized.length, ...(failure ? { error: failure } : {}) };
-    if (photoLabel) return { status: 'estimate', draft: { ...labelTextDraft(photoLabel, text), labelReader } };
+    for (const photo of images) {
+      try { texts.push(await recognizeText(photo, { signal })); } catch (error) { failure = String(error?.message ?? error).slice(0, 200); }
+      if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
+    }
+    // A label may be in any one photo (the front of the pack in another), or split across two: the reading
+    // that finds the most nutrients is used.
+    const readings = [...texts.map(parseNutritionLabel), texts.length > 1 ? parseNutritionLabel(texts.join('\n')) : null].filter(Boolean);
+    const photoLabel = readings.reduce((best, reading) => !best || Object.keys(reading.nutrients).length > Object.keys(best.nutrients).length ? reading : best, null);
+    labelReader = { ms: Date.now() - started, found: Boolean(photoLabel), characters: texts.join('').length,
+      ...(images.length > 1 ? { photos: images.length } : {}), ...(failure ? { error: failure } : {}) };
+    if (photoLabel) return { status: 'estimate', draft: applyStatedNutrients({ ...labelTextDraft(photoLabel, text), labelReader }, typed) };
   }
   onStage('asking-ai');
-  const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
+  const parsed = await requestAnalysis({ kind, text, images, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
   // Label questions apply to any trusted nutrition facts: a label photo, or a product page Google read.
@@ -317,6 +325,6 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     labelServingGrams: parsed.labelServingGrams ?? null,
     labelComponentIndex: parsed.labelComponentIndex
   });
-  const draft = applyStatedNutrients(resolved, parsed.statedNutrients);
+  const draft = applyStatedNutrients(resolved, { ...parsed.statedNutrients, ...typed });
   return { status: 'estimate', draft: labelReader ? { ...draft, labelReader } : draft };
 }

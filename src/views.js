@@ -365,6 +365,13 @@ function renderLibrary({ data, state }) {
   </section>`;
 }
 
+function renderAttachedPhotos(state) {
+  const count = state.photoCount ?? 0;
+  const note = state.photoNote ? `<p class="muted" role="status">${escapeHtml(state.photoNote)}</p>` : '';
+  if (!count) return note;
+  return `<div class="stack attached-photos"><p class="kept-photo">${count} photo${count === 1 ? '' : 's'} attached.</p><ul class="plain-list">${Array.from({ length: count }, (_, index) => `<li><span>Photo ${index + 1}</span><button class="quiet-button" type="button" data-action="remove-analysis-photo" data-photo-index="${index}" aria-label="Remove photo ${index + 1}">Remove</button></li>`).join('')}</ul>${note}</div>`;
+}
+
 function renderAdd({ data, state }) {
   const serviceName = analysisProvider(data.settings) === 'anthropic' ? 'Anthropic' : 'Google Gemini';
   // Items with no nutrition yet (such as the unfilled Huel placeholders) are kept out of one-tap adding.
@@ -378,7 +385,7 @@ function renderAdd({ data, state }) {
       ? `<form class="card stack" data-action="answer-clarification"><h2>One quick question</h2>${analysis.questions.map(question => `<label>${escapeHtml(question.prompt)}${question.options?.length ? `<select name="${escapeHtml(question.id)}" required><option value="">Choose an ingredient</option>${question.options.map(option => `<option value="${escapeHtml(option.value)}">${escapeHtml(option.label)}</option>`).join('')}</select>` : `<input name="${escapeHtml(question.id)}" required>`}</label>`).join('')}<button class="primary-button" type="submit">Continue</button><button class="secondary-button" type="button" data-action="edit-analysis-input">Edit what I typed</button><button class="quiet-button" type="button" data-action="cancel-analysis">Cancel</button></form>`
       : analysis?.status === 'error'
         ? `<section class="card stack" role="alert"><h2>Analysis could not finish</h2><p>${escapeHtml(analysis.error)}</p><form data-action="retry-analysis" class="stack"><button class="secondary-button" type="submit">Try again</button></form><button class="secondary-button" type="button" data-action="edit-analysis-input">Edit what I typed</button><button class="quiet-button" type="button" data-action="open-manual-entry">Enter nutrition manually</button><button class="quiet-button" type="button" data-action="cancel-analysis">Start over</button></section>`
-        : `<form class="card stack" data-action="analyze-food"><h2>What did you eat?</h2><label><span class="sr-only">Describe what you ate</span><textarea name="text" rows="3" placeholder="2 vegan sausages, a cup of brown rice, and broccoli roasted in a little olive oil">${escapeHtml(state.addText ?? '')}</textarea></label>${state.photoKept ? '<p class="kept-photo">Your photo is still attached. <button class="quiet-button" type="button" data-action="remove-analysis-photo">Remove photo</button></p>' : ''}<label>${state.photoKept ? 'Replace the photo (optional)' : 'Photo of the meal or its nutrition label (optional)'}<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label><button class="primary-button" type="submit">Analyze</button><p class="muted">Sent to ${escapeHtml(serviceName)} and USDA. Photos are not saved.</p></form>`;
+        : `<form class="card stack" data-action="analyze-food"><h2>What did you eat?</h2><label><span class="sr-only">Describe what you ate</span><textarea name="text" rows="3" placeholder="2 vegan sausages, a cup of brown rice, and broccoli roasted in a little olive oil">${escapeHtml(state.addText ?? '')}</textarea></label>${renderAttachedPhotos(state)}<label>${state.photoCount ? 'Add another photo (optional)' : 'Photos of the meal or its nutrition label (optional, you can pick several)'}<input name="image" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple></label><button class="primary-button" type="submit">Analyze</button><p class="muted">Numbers you type (like "30g protein") are used instead of what a photo or ${escapeHtml(serviceName)} shows. Photos are read on your phone first, and sent to ${escapeHtml(serviceName)} only when no label is found. Photos are not saved.</p></form>`;
   return `<section class="page stack" aria-labelledby="add-title">
     <div class="page-heading"><div><span class="eyebrow">${escapeHtml(dateLabel(state.selectedDate))}</span><h1 id="add-title">Add</h1></div></div>
     ${analysisContent}
@@ -431,7 +438,7 @@ function servingsQuestion(item, servings) {
   </fieldset>`;
 }
 
-function macroLine(perServing = {}) {
+export function macroLine(perServing = {}) {
   const parts = MACRO_NUTRIENTS.map(definition => {
     const value = nutrientValue(perServing, definition);
     const label = definition.key === 'calories' ? '' : ` ${definition.label.toLocaleLowerCase('en-US')}`;
@@ -482,9 +489,9 @@ function renderConfirmation({ data, state, ui = {} }) {
       <section class="card stack review-summary">
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
         ${item.type === 'supplement' ? `<label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>` : servingsQuestion(item, draft.servings)}
-        ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit details, or analyze a photo of its label, before adding it.</p>'}
+        ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit nutrition facts, or analyze a photo of its label, before adding it.</p>'}
         ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are unknown. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
-        <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
+        <p class="review-totals"><strong>Per serving:</strong> <span data-review-totals>${escapeHtml(macroLine(item.perServing))}</span></p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${partialNote(item) ? `<p class="muted">${escapeHtml(partialNote(item))}</p>` : ''}
         ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
@@ -494,13 +501,17 @@ function renderConfirmation({ data, state, ui = {} }) {
         ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
         : `<button class="primary-button full-width" type="submit" name="intent" value="log">${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}<button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button></div>
       </section>
+      <details class="card stack review-details" data-region="nutrition-editor"${draft.mode === 'manual' || !hasKnownNutrition(item) ? ' open' : ''}>
+        <summary>Edit nutrition facts</summary>
+        <p class="muted">Change any number that looks wrong. What you enter here replaces the estimate and is marked as your entry.</p>
+        <section class="stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
+        <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
+      </details>
       <details class="card stack review-details"${draft.mode === 'manual' || !hasKnownNutrition(item) ? ' open' : ''}>
-        <summary>Edit details</summary>
+        <summary>More details</summary>
         ${recipeReview}
         <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
         <div class="field-grid">${typeField}<label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label></div>
-        <section class="stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
-        <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
       <section class="stack"><h2>Details and evidence</h2>
         <label>Ingredient or component breakdown<textarea name="components" rows="4" placeholder="One component per line">${escapeHtml(components)}</textarea></label>
         <label>Assumptions<textarea name="assumptions" rows="3" placeholder="One assumption per line">${escapeHtml(assumptions)}</textarea></label>

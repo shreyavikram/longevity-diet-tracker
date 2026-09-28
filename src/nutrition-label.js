@@ -107,6 +107,76 @@ function resolveMacros(nutrients, options) {
   return best?.chosen ?? {};
 }
 
+// Nutrition numbers written into a description ("30g protein", "fat: 5 g", "250 calories"). These are what
+// the person says they ate, so they override every other source. A food amount ("1 protein bar", "100g tofu")
+// is not a nutrition number: a gram nutrient needs its unit written after the number, or a colon after its name.
+const STATED = [
+  ['calories', String.raw`kcals?|cals?|calories?`, 'kcal'],
+  ['saturatedFatG', String.raw`sat(?:urated|\.)?\s+fat`, 'g'],
+  ['fatG', String.raw`(?<!sat\s|sat\.\s|saturated\s|trans\s)(?:total\s+)?fat`, 'g'],
+  ['proteinG', String.raw`protein`, 'g'],
+  ['carbsG', String.raw`(?:total\s+)?carb(?:ohydrate)?s?`, 'g'],
+  ['fiberG', String.raw`(?:dietary\s+)?fib(?:er|re)`, 'g'],
+  ['addedSugarG', String.raw`added\s+sugars?`, 'g'],
+  ['sodiumMg', String.raw`sodium`, 'mg'],
+  ['ironMg', String.raw`iron`, 'mg'],
+  ['calciumMg', String.raw`calcium`, 'mg'],
+  ['potassiumMg', String.raw`potassium`, 'mg'],
+  ['zincMg', String.raw`zinc`, 'mg'],
+  ['magnesiumMg', String.raw`magnesium`, 'mg'],
+  ['b12Mcg', String.raw`(?:vitamin\s+)?b-?12`, 'mcg']
+];
+const STATED_UNITS = { g: 'g', gram: 'g', grams: 'g', gm: 'g', mg: 'mg', milligram: 'mg', milligrams: 'mg',
+  mcg: 'mcg', µg: 'mcg', μg: 'mcg', ug: 'mcg', microgram: 'mcg', micrograms: 'mcg' };
+const STATED_UNIT = String.raw`(grams?|gm|g|milligrams?|mg|micrograms?|mcg|µg|μg|ug)\b`;
+const STATED_NUMBER = String.raw`(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?|\.\d+)`;
+
+function statedValue(key, unit, number, writtenUnit) {
+  const value = toNumber(number);
+  if (!Number.isFinite(value) || value < 0) return null;
+  if (unit === 'kcal') return value;
+  const from = STATED_UNITS[String(writtenUnit ?? unit).toLowerCase()];
+  const factor = from && TO_UNIT[unit][from];
+  return factor ? Number((value * factor).toPrecision(6)) : null;
+}
+
+function statedMatches(text, numberFirst) {
+  const found = [];
+  for (const [key, name, unit] of STATED) {
+    const pattern = numberFirst
+      ? unit === 'kcal'
+        ? new RegExp(String.raw`(?<![\w.,])${STATED_NUMBER}\s*(${name})\b`, 'gi')
+        : new RegExp(String.raw`(?<![\w.,])${STATED_NUMBER}\s*${STATED_UNIT}\s*(?:of\s+)?(?:${name})\b`, 'gi')
+      : new RegExp(String.raw`\b(?:${name})\b\s*[:=]?\s*${STATED_NUMBER}(?:\s*${unit === 'kcal' ? String.raw`(kcals?|cals?|calories?)\b` : STATED_UNIT})?(?![\w.])`, 'gi');
+    for (const match of text.matchAll(pattern)) {
+      const writtenUnit = numberFirst ? (unit === 'kcal' ? null : match[2]) : match[2];
+      const separated = !numberFirst && /[:=]/.test(match[0].slice(0, match[0].search(/\d/)));
+      // "protein 20" with no unit or colon is too easily a count; it needs "20g" or "protein: 20".
+      if (!numberFirst && unit !== 'kcal' && !writtenUnit && !separated) continue;
+      const value = statedValue(key, unit, match[1], writtenUnit);
+      if (value !== null) found.push({ key, value, start: match.index, end: match.index + match[0].length });
+    }
+  }
+  return found;
+}
+
+export function statedNutrientsFromText(input) {
+  const text = String(input ?? '');
+  if (!/\d/.test(text)) return {};
+  // Written as "20g protein" or as "protein 20g": the reading that explains more of the text decides the
+  // ambiguous numbers, and the other only adds nutrients that do not overlap it.
+  const numberFirst = statedMatches(text, true);
+  const nameFirst = statedMatches(text, false);
+  const [primary, secondary] = nameFirst.length > numberFirst.length ? [nameFirst, numberFirst] : [numberFirst, nameFirst];
+  const chosen = [...primary];
+  for (const match of secondary) {
+    if (!chosen.some(other => match.start < other.end && other.start < match.end)) chosen.push(match);
+  }
+  const stated = {};
+  for (const match of chosen.sort((left, right) => left.start - right.start)) stated[match.key] ??= match.value;
+  return stated;
+}
+
 export function parseNutritionLabel(input) {
   const text = String(input ?? '').replace(/[•·|]/g, '\n').replace(/[ \t]+/g, ' ')
     // A narrow second "1" is sometimes read as "i" immediately before a microgram unit ("11mcg" → "1imecg").

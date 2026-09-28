@@ -17,7 +17,7 @@ import {
   scaleNutrients
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
-import { renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
+import { macroLine, renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
 import { analyzeInput } from './analysis.js';
 import { createTextRecognizer } from './ocr.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
@@ -54,7 +54,7 @@ const HUEL_SEEDS = Object.freeze([
 ]);
 
 const clone = value => structuredClone(value);
-const FOCUS_DATA_KEYS = ['action', 'route', 'itemId', 'entryId', 'nutrientId', 'nutrientOrigin', 'date', 'ml', 'days', 'id'];
+const FOCUS_DATA_KEYS = ['action', 'route', 'itemId', 'entryId', 'nutrientId', 'nutrientOrigin', 'date', 'ml', 'days', 'id', 'photoIndex'];
 const SAVED_MESSAGES = Object.freeze({
   'save-profile': 'Profile saved. Targets were recalculated.',
   'save-target-overrides': 'Target overrides saved.',
@@ -146,21 +146,28 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, addText: '', photoKept: false, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
   let pendingNutrientFocus = null;
   let analysisController = null;
   let analysisGeneration = 0;
-  let analysisImage = null;
+  let analysisImages = [];
   let pwa = null;
 
-  // The entry being worked on (its text and in-memory photo) is kept until it is logged, saved, or discarded,
+  // Photos stay in memory only (never in state or storage); the state holds just how many there are.
+  const MAX_PHOTOS = 6;
+  function setPhotos(photos) {
+    analysisImages = photos.slice(0, MAX_PHOTOS);
+    state.photoCount = analysisImages.length;
+    state.photoNote = photos.length > MAX_PHOTOS ? `Up to ${MAX_PHOTOS} photos can be analyzed together; the first ${MAX_PHOTOS} were kept.` : '';
+  }
+
+  // The entry being worked on (its text and in-memory photos) is kept until it is logged, saved, or discarded,
   // so a wrong suggestion can go back to the text box.
   function clearEntry() {
-    analysisImage = null;
-    state.photoKept = false;
+    setPhotos([]);
     state.addText = '';
   }
 
@@ -172,7 +179,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     state.analysis = null;
     state.draft = null;
     state.addText = text;
-    state.photoKept = Boolean(analysisImage);
+    state.photoCount = analysisImages.length;
     state.route = 'add';
     render();
     resetScroll();
@@ -198,7 +205,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       ...(result.method ? { method: result.method } : {}),
       ...(result.labelReader ? { labelReader: clone(result.labelReader) } : {}),
       model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
-      input: { text: input.text, hadPhoto: Boolean(input.hadPhoto) },
+      input: { text: input.text, hadPhoto: Boolean(input.hadPhoto), ...(input.photos ? { photos: input.photos } : {}) },
       clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
       estimate: {
         name: result.name,
@@ -264,17 +271,17 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
   };
 
-  async function startAnalysis({ kind = 'auto', text, image, clarificationHistory = [] } = {}) {
+  async function startAnalysis({ kind = 'auto', text, clarificationHistory = [] } = {}) {
     analysisController?.abort();
     const generation = ++analysisGeneration;
     analysisController = new AbortController();
-    // The photo stays in memory only for this analysis (including follow-up questions), never in state or storage.
-    if (image !== undefined) analysisImage = image || null;
-    const input = { kind, text: String(text ?? ''), clarificationHistory, hadPhoto: Boolean(analysisImage) };
+    // The photos stay in memory only for this analysis (including follow-up questions), never in state or storage.
+    const input = { kind, text: String(text ?? ''), clarificationHistory, hadPhoto: analysisImages.length > 0,
+      ...(analysisImages.length > 1 ? { photos: analysisImages.length } : {}) };
     state.analysis = { status: 'loading', ...input };
     render();
     try {
-      const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
+      const result = await analyzeInput({ ...input, images: [...analysisImages], settings: store.get('settings'),
         trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText,
         onStage: stage => {
           if (generation !== analysisGeneration || state.analysis?.status !== 'loading') return;
@@ -1092,8 +1099,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
     if (control.dataset.action === 'sync-cloud') return cloud.syncNow();
     if (control.dataset.action === 'remove-analysis-photo') {
-      analysisImage = null;
-      state.photoKept = false;
+      const form = documentRef?.querySelector?.('form[data-action="analyze-food"]');
+      if (form) state.addText = String(valuesFromForm(form).get('text') ?? state.addText);
+      setPhotos(analysisImages.filter((photo, index) => index !== Number(control.dataset.photoIndex)));
       render();
     }
     if (['open-library-item', 'edit-library-item'].includes(control.dataset.action)) {
@@ -1160,25 +1168,43 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   // Keeps the "You'll log" total and the quick choices in step with the servings box, without re-rendering
   // (a render would drop edits the person has made to other fields).
+  // Edited nutrient boxes count too, so the totals match what will be saved.
+  function formPerServing(form) {
+    try {
+      return itemFromConfirmation(valuesFromForm(form), { allowIncomplete: true }).perServing;
+    } catch {
+      return state.draft.item.perServing;
+    }
+  }
+
   function updateServingsTotal(form) {
     if (!form || state.draft?.kind !== 'confirmation') return;
     const servings = form.elements?.namedItem?.('servings')?.value;
+    const perServing = formPerServing(form);
     const total = form.querySelector?.('[data-servings-total]');
-    if (total) total.textContent = servingsTotalText(state.draft.item.perServing, servings);
+    if (total) total.textContent = servingsTotalText(perServing, servings);
+    const summary = form.querySelector?.('[data-review-totals]');
+    if (summary) summary.textContent = macroLine(perServing);
     for (const choice of form.querySelectorAll?.('[data-action="set-servings"]') ?? []) {
       choice.setAttribute('aria-pressed', String(Number(choice.dataset.servings) === Number(servings)));
     }
   }
 
   function handleInput(event) {
-    if (event.target?.name === 'servings') updateServingsTotal(event.target.closest?.('form[data-action="confirm-item"]'));
+    if (event.target?.name === 'servings' || event.target?.name?.startsWith?.('nutrient_')) updateServingsTotal(event.target.closest?.('form[data-action="confirm-item"]'));
   }
 
   function handleChange(event) {
     const form = event.target.closest?.('form[data-action]');
     if (!form) return;
-    // Start the label reader while the person finishes typing, so it is ready when they tap Analyze.
-    if (form.dataset.action === 'analyze-food' && event.target.name === 'image' && event.target.files?.length) recognizeText.warm?.();
+    // Picked photos join the ones already attached (a phone camera takes one at a time). The label reader
+    // starts while the person finishes typing, so it is ready when they tap Analyze.
+    if (form.dataset.action === 'analyze-food' && event.target.name === 'image' && event.target.files?.length) {
+      recognizeText.warm?.();
+      state.addText = String(valuesFromForm(form).get('text') ?? '');
+      setPhotos([...analysisImages, ...event.target.files]);
+      render();
+    }
     if (form.dataset.action === 'confirm-item'
       && event.target.name === 'type'
       && state.draft?.mode !== 'logEdit') {
@@ -1250,11 +1276,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       }
       case 'analyze-food':
       {
-        const chosen = formData.get('image')?.size ? formData.get('image') : null;
-        const keep = !chosen && state.photoKept;
-        state.photoKept = false;
+        // Photos still in the file box (if its change was not seen) join the attached ones.
+        setPhotos([...analysisImages, ...formData.getAll('image').filter(file => file?.size)]);
         state.addText = String(formData.get('text') ?? '');
-        return startAnalysis({ kind: 'auto', text: formData.get('text'), image: keep ? undefined : chosen });
+        return startAnalysis({ kind: 'auto', text: formData.get('text') });
       }
       case 'retry-analysis':
         if (state.analysis?.status === 'error') return startAnalysis({ kind: state.analysis.kind, text: state.analysis.text,

@@ -410,3 +410,4 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .servings-question legend { font-weight: 600; padding: 0; margin-bottom: 0.25rem; }
 .serving-choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
 .serving-choices [aria-pressed="true"] { background: var(--forest); border-color: var(--forest); color: #fff; }
+.attached-photos .plain-list li { align-items: center; }
