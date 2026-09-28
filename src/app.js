@@ -220,7 +220,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       provider,
       ...(result.method ? { method: result.method } : {}),
       ...(result.labelReader ? { labelReader: clone(result.labelReader) } : {}),
-      model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
+      model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : provider === 'openrouter' ? settings.openrouterModel || 'openrouter/free' : settings.model || 'claude-sonnet-5',
       input: { text: input.text, hadPhoto: Boolean(input.hadPhoto), ...(input.photos ? { photos: input.photos } : {}) },
       clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
       estimate: {
@@ -934,11 +934,13 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'SET_INTEGRATIONS':
         store.update('settings', settings => ({
           ...settings,
-          provider: ['gemini', 'anthropic'].includes(action.provider) ? action.provider
+          provider: ['gemini', 'openrouter', 'anthropic'].includes(action.provider) ? action.provider
             : String(action.anthropicApiKey ?? '').trim() && !String(action.geminiApiKey ?? '').trim() ? 'anthropic' : 'gemini',
           geminiApiKey: String(action.geminiApiKey ?? settings.geminiApiKey ?? '').trim(),
           geminiModel: String(action.geminiModel ?? settings.geminiModel ?? '').trim() || 'gemini-3.8-flash',
           anthropicApiKey: String(action.anthropicApiKey ?? '').trim(),
+          openrouterApiKey: String(action.openrouterApiKey ?? settings.openrouterApiKey ?? '').trim(),
+          openrouterModel: String(action.openrouterModel ?? settings.openrouterModel ?? '').trim() || 'openrouter/free',
           foodDataCentralApiKey: String(action.foodDataCentralApiKey ?? '').trim(),
           model: String(action.model ?? settings.model)
         }));
@@ -1374,6 +1376,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           geminiApiKey: formData.get('geminiApiKey'),
           geminiModel: formData.get('geminiModel'),
           anthropicApiKey: formData.get('anthropicApiKey'),
+          openrouterApiKey: formData.get('openrouterApiKey'),
+          openrouterModel: formData.get('openrouterModel'),
           foodDataCentralApiKey: formData.get('foodDataCentralApiKey'),
           model: formData.get('model')
         });
@@ -1496,9 +1500,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     hasHistory: () => Object.keys(store.get('log')).length > 0 || store.get('bodyMetrics').length > 0,
     importData: text => {
       // A cloud restore keeps the keys typed on this device; backups never contain them.
-      const { geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo } = store.get('settings');
+      const { geminiApiKey, anthropicApiKey, openrouterApiKey, foodDataCentralApiKey, cloudToken, cloudRepo } = store.get('settings');
       store.importData(text);
-      store.update('settings', settings => ({ ...settings, geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo }));
+      store.update('settings', settings => ({ ...settings, geminiApiKey, anthropicApiKey, openrouterApiKey, foodDataCentralApiKey, cloudToken, cloudRepo }));
       ensureSetup();
     },
     applyInboxEntry,
