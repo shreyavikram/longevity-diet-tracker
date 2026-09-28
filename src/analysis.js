@@ -94,7 +94,8 @@ export function resolveDraft(draft, selections = {}) {
     const scaledUsda = selected ? Object.fromEntries(Object.entries(selected.values).map(([key, value]) => [key, value * factor])) : {};
     const scaledLabel = hasLabelValues && index === labelComponentIndex
       ? Object.fromEntries(Object.entries(labelValues).map(([key, value]) => [key, value * component.estimatedGrams / draft.labelServingGrams])) : {};
-    const fallback = !selected && component.fallbackNutrients ? component.fallbackNutrients : undefined;
+    const labelled = hasLabelValues && index === labelComponentIndex;
+    const fallback = !selected && !labelled && component.fallbackNutrients ? component.fallbackNutrients : undefined;
     const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined,
       label: Object.keys(scaledLabel).length ? scaledLabel : undefined, ai: fallback });
     for (const [key, value] of Object.entries(merged.values)) {
@@ -108,9 +109,18 @@ export function resolveDraft(draft, selections = {}) {
       provenance[key] = summarizeContributors(contributors);
     }
   }
+  // A nutrient some ingredients do not report keeps its known part, flagged partial with the missing
+  // ingredients named, so coverage can show progress. Calories stay strict: an undercount would
+  // misstate the remaining budget.
   for (const key of Object.keys(recipeTotal)) if (reportedBy[key] < components.length) {
-    delete recipeTotal[key];
-    delete provenance[key];
+    if (key === 'calories') {
+      delete recipeTotal[key];
+      delete provenance[key];
+      continue;
+    }
+    const reported = new Set((provenance[key].contributors ?? []).map(contributor => contributor.componentIndex));
+    provenance[key] = { ...provenance[key], partial: true,
+      missingFrom: components.filter((component, index) => !reported.has(index)).map(component => component.name) };
   }
   const perServing = nested(Object.fromEntries(Object.entries(recipeTotal).map(([key, value]) => [key, value / servings])));
   const basisNote = labelBasis ? `Label values for ${labelBasis.componentName} scaled from ${labelBasis.printedServingGrams} g printed serving to ${labelBasis.trackedServingGrams} g of that ingredient per tracked serving.` : null;
@@ -180,7 +190,7 @@ function applyStatedNutrients(draft, stated) {
     assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache }) {
+export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
@@ -215,21 +225,40 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     }
   }
   const components = [];
-  for (const component of parsed.components) {
+  for (const [index, component] of parsed.components.entries()) {
+    // A photographed or linked label is the truth for its own product; USDA is not consulted for it.
+    if (Object.keys(parsed.labelNutrients ?? {}).length && index === (parsed.labelComponentIndex ?? (parsed.components.length === 1 ? 0 : -1))) {
+      components.push({ ...component, candidates: [], selectedFdcId: null, matchResolved: true });
+      continue;
+    }
     let candidates = [];
     let lookupError;
+    // The on-device USDA copy answers generic foods; live USDA (with its hourly limit) is asked only when
+    // that copy has no record containing every search word, usually a brand-name product.
+    const local = localSearch ? await localSearch(component.usdaSearch) : null;
     try {
-      // Remembered answers keep repeat foods from spending the shared USDA key's small hourly allowance.
-      let foods = searchCache?.get?.(component.usdaSearch);
-      if (!foods) {
-        foods = await searchFoods(component.usdaSearch, settings?.foodDataCentralApiKey, fetchFn, { signal });
-        searchCache?.set?.(component.usdaSearch, foods);
+      if (local?.length) {
+        candidates = rankCandidates(component, local);
+      } else {
+        // Remembered answers keep repeat foods from spending the shared USDA key's small hourly allowance.
+        let foods = searchCache?.get?.(component.usdaSearch);
+        if (!foods) {
+          foods = await searchFoods(component.usdaSearch, settings?.foodDataCentralApiKey, fetchFn, { signal });
+          searchCache?.set?.(component.usdaSearch, foods);
+        }
+        candidates = rankCandidates(component, foods);
       }
-      candidates = rankCandidates(component, foods);
     } catch (error) {
       if (error.code === 'cancelled') throw error;
       if (!(error instanceof AnalysisError)) throw error;
       lookupError = error.message;
+    }
+    if (!candidates.length && localSearch) {
+      const loose = await localSearch(component.usdaSearch, { minShare: 0.6 });
+      if (loose?.length) {
+        candidates = rankCandidates(component, loose);
+        lookupError = undefined;
+      }
     }
     components.push({ ...component, candidates: candidates.slice(0, 8), selectedFdcId: null, matchResolved: true,
       ...(lookupError ? { lookupError } : {}) });

@@ -270,7 +270,7 @@ function renderNutrientDetails(item) {
     ? `<ul class="detail-list">${item.contributors.map(contributor => `<li><div><strong>${escapeHtml(contributor.name)}</strong><small>${escapeHtml(dateLabel(contributor.date))} · ${escapeHtml(sourceLabel(contributor.source))}</small></div><span>${escapeHtml(formatNutrient(contributor.amount, item.unit))}</span></li>`).join('')}</ul>`
     : '<p class="muted">No confirmed contributors in this seven-day window.</p>';
   const unknown = item.unknownItems.length
-    ? `<p class="detail-label">Unknown in:</p><ul class="unknown-list">${item.unknownItems.map(entry => `<li>${escapeHtml(entry.name)} <small>${escapeHtml(dateLabel(entry.date))}${entry.reason === 'missingHistoricalSnapshot' ? ' · Historical label snapshot unavailable' : ''}</small></li>`).join('')}</ul>`
+    ? `<p class="detail-label">Unknown in:</p><ul class="unknown-list">${item.unknownItems.map(entry => `<li>${escapeHtml(entry.name)} <small>${escapeHtml(dateLabel(entry.date))}${entry.reason === 'missingHistoricalSnapshot' ? ' · Historical label snapshot unavailable' : entry.reason === 'partial' ? ' · Partly known: some ingredients had no data' : ''}</small></li>`).join('')}</ul>`
     : '<p class="muted">Every logged item in this window reports this nutrient.</p>';
   return `<dialog class="nutrient-dialog" tabindex="-1" aria-labelledby="nutrient-detail-title">
     <div class="dialog-heading"><div><span class="coverage-state state-${escapeHtml(item.state)}">${escapeHtml(COVERAGE_LABELS[item.state])}</span><h2 id="nutrient-detail-title">${escapeHtml(item.label)} details</h2></div><button class="quiet-button icon-button" type="button" data-action="close-nutrient-details" aria-label="Close nutrient details">×</button></div>
@@ -425,6 +425,13 @@ function sourceNote(item) {
   return `Based on ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}.`;
 }
 
+function partialNote(item) {
+  const partial = REVIEW_NUTRIENTS.filter(definition => item.provenance?.[definition.key]?.partial);
+  if (!partial.length) return '';
+  const missing = [...new Set(partial.flatMap(definition => item.provenance[definition.key].missingFrom ?? []))];
+  return `Partly known${missing.length ? ` (no data for ${missing.join(', ')})` : ''}: ${partial.map(definition => definition.label).join(', ')}.`;
+}
+
 function renderConfirmation({ data, state, ui = {} }) {
   const draft = state.draft;
   const item = draft.item;
@@ -454,6 +461,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are unknown. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
         <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
+        ${partialNote(item) ? `<p class="muted">${escapeHtml(partialNote(item))}</p>` : ''}
         ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
         ${formNotice(ui, 'confirm-item')}
         ${draft.mode === 'analysis' ? '<button class="secondary-button full-width" type="button" data-action="edit-analysis-input">Edit what I typed</button>' : ''}

@@ -259,6 +259,9 @@ function detailFor(items, definition, targets, calorieTarget, date) {
   for (const item of items) {
     const amount = nutrientValue(item.nutrients, definition);
     if (Number.isFinite(amount)) {
+      if (item.provenance?.[definition.key]?.partial) {
+        unknownItems.push({ date, itemId: item.id, itemType: item.type, name: item.name, reason: 'partial' });
+      }
       contributors.push({
         date,
         itemId: item.id,

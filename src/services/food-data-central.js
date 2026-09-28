@@ -33,7 +33,8 @@ function nutrientRecord(item) {
   const id = Number(detail.id ?? item.nutrientId);
   if (id === 1270) return null;
   const key = NUTRIENT_ID_MAP.get(id)?.[0] ?? NAME_MAP.get(clean(detail.name ?? item.nutrientName));
-  const unit = String(detail.unitName ?? item.unitName ?? '').toUpperCase().replace('MCG', 'UG').replace('µG', 'UG');
+  // USDA downloads write micrograms as µg (micro sign or Greek mu); the API writes UG.
+  const unit = String(detail.unitName ?? item.unitName ?? '').replace(/^[\u00b5\u03bc]g$/i, 'UG').toUpperCase().replace('MCG', 'UG');
   const amount = item.amount ?? item.value;
   if ((!CANONICAL.has(key) && key !== 'epaMg' && key !== 'dhaMg') || amount === null || amount === undefined || amount === '' || !Number.isFinite(Number(amount)) || Number(amount) < 0) return null;
   const expected = EXPECTED_UNIT[key];

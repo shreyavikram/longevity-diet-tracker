@@ -24,6 +24,7 @@ import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
 import { mergeActivity, parseActivity } from './activity.js';
 import { createCloudSync } from './cloud.js';
+import { createLocalFoodSearch } from './services/usda-local.js';
 
 const VALID_ROUTES = new Set(['today', 'add', 'library', 'progress', 'settings']);
 const HUEL_SEEDS = Object.freeze([
@@ -131,7 +132,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
   cryptoRef = globalThis.crypto, confirmFn = message => globalThis.confirm?.(message) ?? false,
-  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
+  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
     link.href = url;
@@ -241,6 +242,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   }
 
   // USDA search results kept on this device for 30 days (a convenience cache, not tracker data).
+  const localSearch = createLocalFoodSearch({ fetchFn: localFoodsFetch });
   const USDA_CACHE_KEY = 'usdaSearchCache';
   const searchCache = {
     read() {
@@ -270,7 +272,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
     try {
       const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
-        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache });
+        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch });
       if (generation !== analysisGeneration) return;
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
