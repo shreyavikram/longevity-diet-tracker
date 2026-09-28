@@ -17,7 +17,7 @@ import {
   scaleNutrients
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
-import { macroLine, renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
+import { dateLabel, macroLine, renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
 import { analyzeInput } from './analysis.js';
 import { createTextRecognizer } from './ocr.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
@@ -132,7 +132,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 }
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
-  cryptoRef = globalThis.crypto, confirmFn = message => globalThis.confirm?.(message) ?? false,
+  cryptoRef = globalThis.crypto, dayMemory = globalThis.localStorage, confirmFn = message => globalThis.confirm?.(message) ?? false,
   pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, recognizeText = createTextRecognizer({ documentRef }), activityUrl = './activity.json', downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
@@ -144,9 +144,25 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   } }) {
   if (!store) throw new TypeError('A store is required');
-  const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
+  const state = { route: 'today', selectedDate: rememberedDay(), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
     dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
+  // The day being viewed survives a reload (iOS reloads a backgrounded app, for example while the camera is
+  // open, and applying an update reloads too) for an hour after it was last used, then it is today again.
+  function rememberedDay() {
+    const today = localDate(clock());
+    try {
+      const saved = JSON.parse(dayMemory?.getItem('selectedDay') ?? 'null');
+      const age = clock().getTime() - Number(saved?.at);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(saved?.date ?? '') && saved.date <= today && age >= 0 && age < 3600000) return saved.date;
+    } catch { /* Remembering the day is a convenience. */ }
+    return today;
+  }
+
+  function rememberDay() {
+    try { dayMemory?.setItem('selectedDay', JSON.stringify({ date: state.selectedDate, at: clock().getTime() })); } catch { /* Optional. */ }
+  }
+
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
@@ -375,6 +391,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         dataStatus: state.dataStatus, notice: state.notice, cloudStatus: state.cloudStatus, dayProgress: dayProgress(), ...pwaUi() }
     });
     restoreFocus(focused);
+    rememberDay();
     schedulePush();
     const nutrientDialog = documentRef?.querySelector?.('.nutrient-dialog');
     if (nutrientDialog) {
@@ -553,6 +570,16 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   function editLogEntry(action) {
     const servings = finiteNonNegative(action.servings, 'Servings');
     if (servings === 0) throw new RangeError('Servings must be greater than zero');
+    // A new day moves the entry there, keeping its id and when it was first logged.
+    if (action.newDate && action.newDate !== action.date) {
+      assertDate(action.newDate);
+      editLogEntry({ ...action, newDate: null });
+      const moved = (store.get('log')[action.date] ?? []).find(entry => entry.id === action.entryId);
+      if (!moved) return;
+      updateDatedMap('log', action.date, entries => (entries ?? []).filter(entry => entry.id !== action.entryId));
+      updateDatedMap('log', action.newDate, entries => [...(entries ?? []), moved]);
+      return;
+    }
     updateDatedMap('log', action.date, entries => (entries ?? []).map(entry => {
       if (entry.id !== action.entryId) return entry;
       if (action.item && action.item.type !== entry.type) return entry;
@@ -1097,6 +1124,17 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       if (input) input.value = control.dataset.servings;
       updateServingsTotal(control.form);
     }
+    if (control.dataset.action === 'toggle-more-nutrients' && state.draft?.kind === 'confirmation') {
+      // Typed changes are kept in the draft so opening this section never loses them.
+      const form = control.closest?.('form[data-action="confirm-item"]');
+      if (form) {
+        const formData = valuesFromForm(form);
+        state.draft = { ...state.draft, item: itemFromConfirmation(formData, { allowIncomplete: true }), servings: formData.get('servings') ?? state.draft.servings };
+      }
+      const open = state.draft.moreNutrientsOpen ?? control.getAttribute?.('aria-expanded') === 'true';
+      state.draft = { ...state.draft, moreNutrientsOpen: !open };
+      render();
+    }
     if (control.dataset.action === 'sync-cloud') return cloud.syncNow();
     if (control.dataset.action === 'remove-analysis-photo') {
       const form = documentRef?.querySelector?.('form[data-action="analyze-food"]');
@@ -1190,7 +1228,15 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
   }
 
+  function updateDayButton(form) {
+    const day = form?.elements?.namedItem?.('logDate')?.value;
+    const button = form?.querySelector?.('[data-day-button]');
+    if (!button || !/^\d{4}-\d{2}-\d{2}$/.test(day ?? '')) return;
+    button.textContent = button.textContent.replace(/(Add to|Save changes to|Mark complete for) .*/, `$1 ${dateLabel(day)}`);
+  }
+
   function handleInput(event) {
+    if (event.target?.name === 'logDate') updateDayButton(event.target.closest?.('form[data-action="confirm-item"]'));
     if (event.target?.name === 'servings' || event.target?.name?.startsWith?.('nutrient_')) updateServingsTotal(event.target.closest?.('form[data-action="confirm-item"]'));
   }
 
@@ -1359,6 +1405,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         const item = itemFromConfirmation(formData);
         const servings = finiteNonNegative(formData.get('servings'), 'Servings');
         const intent = event.submitter?.value;
+        const day = String(formData.get('logDate') || state.selectedDate);
+        assertDate(day);
         if (intent === 'save') {
           dispatch({ type: 'SAVE_LIBRARY_ITEM', item });
           state.draft = null;
@@ -1368,11 +1416,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         } else if (intent === 'log' || intent === 'complete') {
           if (item.type === 'supplement') {
             saveLibraryItem(item);
-            toggleSupplement({ date: state.selectedDate, itemId: item.id, completed: true });
+            toggleSupplement({ date: day, itemId: item.id, completed: true });
           } else if (state.draft?.mode === 'logEdit') {
             dispatch({
               type: 'EDIT_LOG_ENTRY',
               date: state.selectedDate,
+              newDate: day,
               entryId: state.draft.entryId,
               servings,
               item
@@ -1383,8 +1432,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
             const existing = store.get('library').find(candidate => candidate.id === item.id);
             if (item.favorite && !existing) saveLibraryItem(item);
             else if (existing && Boolean(existing.favorite) !== Boolean(item.favorite)) saveLibraryItem({ ...existing, favorite: Boolean(item.favorite) });
-            dispatch({ type: 'LOG_ITEM', date: state.selectedDate, item, servings });
+            dispatch({ type: 'LOG_ITEM', date: day, item, servings });
           }
+          state.selectedDate = day;
           state.draft = null;
           clearEntry();
           state.route = 'today';

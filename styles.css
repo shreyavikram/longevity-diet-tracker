@@ -411,3 +411,5 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .serving-choices { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.5rem; }
 .serving-choices [aria-pressed="true"] { background: var(--forest); border-color: var(--forest); color: #fff; }
 .attached-photos .plain-list li { align-items: center; }
+.macro-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+[hidden] { display: none !important; }

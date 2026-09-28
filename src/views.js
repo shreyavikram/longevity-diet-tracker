@@ -45,7 +45,7 @@ const format = (value, digits = 0) => Number(value).toLocaleString('en-US', {
   minimumFractionDigits: digits
 });
 
-const dateLabel = date => new Date(`${date}T12:00:00`).toLocaleDateString('en-US', {
+export const dateLabel = date => new Date(`${date}T12:00:00`).toLocaleDateString('en-US', {
   month: 'long', day: 'numeric'
 });
 
@@ -394,7 +394,14 @@ function renderAdd({ data, state }) {
   </section>`;
 }
 
-function nutrientInput(definition, item) {
+// The main numbers as plain boxes, always visible on the review. Their sources are under "Vitamins, minerals,
+// and sources"; a changed number becomes her own entry.
+function macroBox(definition, item) {
+  const value = nutrientValue(item.perServing ?? {}, definition);
+  return `<label class="macro-box">${escapeHtml(definition.label)} (${escapeHtml(definition.unit)})<input name="nutrient_${escapeHtml(definition.key)}" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(Number.isFinite(value) ? editableNumber(value) : '')}" placeholder="Unknown"></label>`;
+}
+
+function nutrientInput(definition, item, { amount = true } = {}) {
   const value = nutrientValue(item.perServing ?? {}, definition);
   const provenance = item.provenance?.[definition.key] ?? {};
   const source = provenance.source ?? 'manual';
@@ -407,7 +414,7 @@ function nutrientInput(definition, item) {
     provenance.verifiedAt ? `Verified: ${provenance.verifiedAt}` : ''
   ].filter(Boolean).join(' · ');
   return `<fieldset class="stack"><legend>${escapeHtml(definition.label)} (${escapeHtml(definition.unit)})</legend>
-    <label>Amount per serving<input name="nutrient_${escapeHtml(definition.key)}" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(Number.isFinite(value) ? editableNumber(value) : '')}" placeholder="Unknown"></label>
+    ${amount ? `<label>Amount per serving<input name="nutrient_${escapeHtml(definition.key)}" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(Number.isFinite(value) ? editableNumber(value) : '')}" placeholder="Unknown"></label>` : ''}
     <div class="field-grid"><label>Source<select name="source_${escapeHtml(definition.key)}">${NUTRIENT_SOURCES.map(option => `<option value="${option.id}"${selected(source, option.id)}>${escapeHtml(option.label)}</option>`).join('')}</select></label><label>Confidence<select name="confidence_${escapeHtml(definition.key)}">${CONFIDENCE_LEVELS.map(option => `<option value="${option.id}"${selected(confidence, option.id)}>${escapeHtml(option.label)}</option>`).join('')}</select></label></div>
     ${sourceDetails ? `<small class="muted">${escapeHtml(sourceDetails)}</small>` : ''}
   </fieldset>`;
@@ -479,6 +486,7 @@ function renderConfirmation({ data, state, ui = {} }) {
     ? item.components.map(component => typeof component === 'string' ? component : component.name).filter(Boolean).join('\n')
     : '';
   const analysisReview = draft.analysisReview;
+  const moreOpen = draft.moreNutrientsOpen ?? (draft.mode === 'manual' || !hasKnownNutrition(item));
   const labelBasisText = analysisReview?.labelBasis
     ? `<p><strong>Label serving basis${analysisReview.labelBasis.componentName ? ` for ${escapeHtml(analysisReview.labelBasis.componentName)}` : ''}:</strong> ${escapeHtml(analysisReview.labelBasis.printedServingGrams)} g printed label serving to ${escapeHtml(editableNumber(analysisReview.labelBasis.trackedServingGrams))} g tracked serving of that ingredient (${escapeHtml(Number(analysisReview.labelBasis.scaleFactor.toPrecision(4)))}× label values).</p>`
     : '';
@@ -488,9 +496,11 @@ function renderConfirmation({ data, state, ui = {} }) {
     <form class="stack" data-action="confirm-item">
       <section class="card stack review-summary">
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
+        <label>Day<input name="logDate" type="date" required value="${escapeHtml(state.selectedDate)}"></label>
         ${item.type === 'supplement' ? `<label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>` : servingsQuestion(item, draft.servings)}
-        ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit nutrition facts, or analyze a photo of its label, before adding it.</p>'}
+        ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values below, or analyze a photo of its label, before adding it.</p>'}
         ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are unknown. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
+        <section class="stack" aria-labelledby="nutrition-facts-title"><h2 id="nutrition-facts-title">Nutrition facts per serving</h2><p class="muted">Change any number that looks wrong. A number you change is saved as your own entry.</p><div class="macro-grid">${MACRO_NUTRIENTS.map(definition => macroBox(definition, item)).join('')}</div></section>
         <p class="review-totals"><strong>Per serving:</strong> <span data-review-totals>${escapeHtml(macroLine(item.perServing))}</span></p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${partialNote(item) ? `<p class="muted">${escapeHtml(partialNote(item))}</p>` : ''}
@@ -498,15 +508,16 @@ function renderConfirmation({ data, state, ui = {} }) {
         ${formNotice(ui, 'confirm-item')}
         ${draft.mode === 'analysis' ? '<button class="secondary-button full-width" type="button" data-action="edit-analysis-input">Edit what I typed</button>' : ''}
               <div class="stack">${item.type === 'supplement'
-        ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
-        : `<button class="primary-button full-width" type="submit" name="intent" value="log">${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}<button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button></div>
+        ? `<button class="primary-button full-width" type="submit" name="intent" value="complete" data-day-button>Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
+        : `<button class="primary-button full-width" type="submit" name="intent" value="log" data-day-button>${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}<button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button></div>
       </section>
-      <details class="card stack review-details" data-region="nutrition-editor"${draft.mode === 'manual' || !hasKnownNutrition(item) ? ' open' : ''}>
-        <summary>Edit nutrition facts</summary>
-        <p class="muted">Change any number that looks wrong. What you enter here replaces the estimate and is marked as your entry.</p>
-        <section class="stack"><h2>Macros per serving</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item)).join('')}</div></section>
-        <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
-      </details>
+      <section class="card stack">
+        <button class="secondary-button full-width" type="button" data-action="toggle-more-nutrients" aria-expanded="${moreOpen}" aria-controls="more-nutrients">Vitamins, minerals, and sources</button>
+        <div class="stack" id="more-nutrients" data-region="more-nutrients"${moreOpen ? '' : ' hidden'}>
+          <section class="stack"><h2>Tracked nutrients per serving</h2><p class="muted">Leave an unknown value blank. It will not be counted as zero.</p><div class="field-grid">${tracked.map(definition => nutrientInput(definition, item)).join('')}</div></section>
+          <section class="stack"><h2>Sources for the main numbers</h2><div class="field-grid">${MACRO_NUTRIENTS.map(definition => nutrientInput(definition, item, { amount: false })).join('')}</div></section>
+        </div>
+      </section>
       <details class="card stack review-details"${draft.mode === 'manual' || !hasKnownNutrition(item) ? ' open' : ''}>
         <summary>More details</summary>
         ${recipeReview}
