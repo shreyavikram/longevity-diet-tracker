@@ -190,6 +190,7 @@ export function createStore({ storage, now = () => new Date() }) {
       payload.settings.anthropicApiKey = '';
       payload.settings.geminiApiKey = '';
       payload.settings.foodDataCentralApiKey = '';
+      payload.settings.cloudToken = '';
     }
     payload.exportedAt = now().toISOString();
     return JSON.stringify(payload, null, 2);
@@ -213,6 +214,7 @@ export function createStore({ storage, now = () => new Date() }) {
       prepared.settings.anthropicApiKey = '';
       prepared.settings.geminiApiKey = '';
       prepared.settings.foodDataCentralApiKey = '';
+      prepared.settings.cloudToken = '';
     }
     writeAtomically(prepared, 'Import could not be saved. Existing data was restored.');
     migrationChecked = true;

@@ -102,6 +102,8 @@ export const DEFAULT_STATE = Object.freeze({
     geminiModel: 'gemini-3.8-flash',
     anthropicApiKey: '',
     foodDataCentralApiKey: '',
+    cloudRepo: 'shreyavikram/longevity-diet-data',
+    cloudToken: '',
     model: 'claude-sonnet-5',
     trainingDayToggleEnabled: true,
     weekStartsMonday: true,

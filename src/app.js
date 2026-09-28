@@ -23,6 +23,7 @@ import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js'
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
 import { mergeActivity, parseActivity } from './activity.js';
+import { createCloudSync } from './cloud.js';
 
 const VALID_ROUTES = new Set(['today', 'add', 'library', 'progress', 'settings']);
 const HUEL_SEEDS = Object.freeze([
@@ -60,7 +61,8 @@ const SAVED_MESSAGES = Object.freeze({
   'save-training-behavior': 'Training behavior saved.',
   'save-water-increments': 'Water buttons saved.',
   'save-integrations': 'Integrations saved.',
-  'save-body-metric': 'Reading saved.'
+  'save-body-metric': 'Reading saved.',
+  'save-cloud': 'Cloud backup settings saved.'
 });
 
 function userMessage(error) {
@@ -129,7 +131,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
   cryptoRef = globalThis.crypto, confirmFn = message => globalThis.confirm?.(message) ?? false,
-  pwaFactory = setupPwa, activityFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
+  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
     link.href = url;
@@ -142,7 +144,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, coverageOpen: false, addText: '', photoKept: false, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, addText: '', photoKept: false, installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
@@ -326,9 +328,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       computedTargets,
       effectiveTargets: resolveEffectiveTargets(data.targets),
       ui: { canUndoWater: (waterUndo.get(state.selectedDate)?.length ?? 0) > 0,
-        dataStatus: state.dataStatus, notice: state.notice, ...pwaUi() }
+        dataStatus: state.dataStatus, notice: state.notice, cloudStatus: state.cloudStatus, ...pwaUi() }
     });
     restoreFocus(focused);
+    schedulePush();
     const nutrientDialog = documentRef?.querySelector?.('.nutrient-dialog');
     if (nutrientDialog) {
       nutrientDialog.addEventListener?.('cancel', event => {
@@ -1024,6 +1027,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
     if (control.dataset.action === 'edit-analysis-input') editAnalysisInput();
+    if (control.dataset.action === 'sync-cloud') return cloud.syncNow();
     if (control.dataset.action === 'remove-analysis-photo') {
       analysisImage = null;
       state.photoKept = false;
@@ -1202,6 +1206,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         dispatch({ type: 'SET_WATER_INCREMENTS', glassMl: imperial ? flOzToMl(glass) : glass, bottleMl: imperial ? flOzToMl(bottle) : bottle });
         break;
       }
+      case 'save-cloud':
+        store.update('settings', settings => ({ ...settings,
+          cloudRepo: String(formData.get('cloudRepo') ?? '').trim() || 'shreyavikram/longevity-diet-data',
+          cloudToken: String(formData.get('cloudToken') ?? '').trim() }));
+        render();
+        return cloud.syncNow();
       case 'save-integrations':
         dispatch({
           type: 'SET_INTEGRATIONS',
@@ -1296,6 +1306,60 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   // Workout days published from Lift arrive in the background; like update notices, they never
   // redraw while something is being edited. The next render shows them.
+  function applyActivityPayload(activity) {
+    if (!activity) return false;
+    const { dayState, changed } = mergeActivity(store.get('dayState'), activity);
+    if (changed) store.set('dayState', dayState);
+    if (store.get('meta').activitySyncedAt !== activity.generatedAt) {
+      store.update('meta', meta => ({ ...meta, activitySyncedAt: activity.generatedAt }));
+    }
+    return changed;
+  }
+
+  // Entries added from outside the app (for example by Claude) through the cloud inbox.
+  function applyInboxEntry(entry) {
+    const item = entry?.item;
+    if (!item || typeof item.name !== 'string' || !item.name.trim() || !LIBRARY_ITEM_TYPES.some(type => type.id === item.type)) {
+      throw new TypeError('Inbox item is invalid');
+    }
+    const prepared = { ...clone(item), id: item.id || nextId('library'), perServing: clone(item.perServing ?? {}),
+      provenance: clone(item.provenance ?? {}), servingLabel: String(item.servingLabel ?? '1 serving') };
+    if (entry.kind === 'library' || prepared.favorite || prepared.type === 'supplement') saveLibraryItem(prepared);
+    if (entry.kind === 'log') {
+      if (prepared.type === 'supplement') toggleSupplement({ date: entry.date, itemId: prepared.id, completed: true });
+      else logItem({ date: entry.date, item: prepared, servings: entry.servings ?? 1 });
+    }
+  }
+
+  const cloud = createCloudSync({
+    getConfig: () => ({ token: store.get('settings').cloudToken, repo: store.get('settings').cloudRepo }),
+    exportData: () => store.exportData(),
+    hasHistory: () => Object.keys(store.get('log')).length > 0 || store.get('bodyMetrics').length > 0,
+    importData: text => {
+      // A cloud restore keeps the keys typed on this device; backups never contain them.
+      const { geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo } = store.get('settings');
+      store.importData(text);
+      store.update('settings', settings => ({ ...settings, geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo }));
+      ensureSetup();
+    },
+    applyInboxEntry,
+    applyActivity: payload => applyActivityPayload(parseActivity(JSON.stringify(payload))),
+    fetchFn: cloudFetch,
+    onStatus: (text, { ok } = {}) => {
+      state.cloudStatus = text;
+      const region = documentRef?.querySelector?.('[data-region="cloud-status"]');
+      if (!isEditing()) render();
+      else if (region) region.textContent = text;
+    },
+    now: clock
+  });
+  let pushTimer = null;
+  function schedulePush() {
+    if (!cloud.configured()) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => cloud.push(), 4000);
+  }
+
   async function syncActivity() {
     try {
       const response = await activityFetch(activityUrl, { cache: 'no-store' });
@@ -1347,14 +1411,20 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         onInstall: available => { state.canInstall = available; refreshPwaRegions(); },
         onUpdate: ready => { state.updateReady = ready; refreshPwaRegions(); }
       });
-      documentRef?.addEventListener?.('visibilitychange', () => { if (documentRef.visibilityState === 'visible') syncActivity(); });
-      documentRef?.defaultView?.addEventListener?.('online', () => syncActivity());
+      documentRef?.addEventListener?.('visibilitychange', () => {
+        if (documentRef.visibilityState === 'visible') {
+          syncActivity();
+          cloud.syncNow();
+        } else cloud.push();
+      });
+      documentRef?.defaultView?.addEventListener?.('online', () => { syncActivity(); cloud.syncNow(); });
     }
     render();
     syncActivity();
+    cloud.syncNow();
   }
 
-  return { start, navigate, getState: () => clone(state), dispatch, syncActivity };
+  return { start, navigate, getState: () => clone(state), dispatch, syncActivity, syncCloud: () => cloud.syncNow() };
 }
 
 if (typeof document !== 'undefined' && typeof localStorage !== 'undefined') {
