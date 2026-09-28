@@ -443,6 +443,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
         <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>
         ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit details, or analyze a photo of its label, before adding it.</p>'}
+        ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are unknown. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
         <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
@@ -631,12 +632,13 @@ export function renderSettings({ data, ui = {} }) {
       <ul class="evidence-list"><li><a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">Get a free Gemini API key</a></li></ul>
       <label>Gemini API key<input name="geminiApiKey" type="password" autocomplete="off" value="${escapeHtml(settings.geminiApiKey)}"></label>
       <label>Gemini model<input name="geminiModel" type="text" value="${escapeHtml(settings.geminiModel || 'gemini-3.8-flash')}"></label>
-      <details class="stack"><summary>Anthropic and USDA keys (optional)</summary>
+      <p class="muted">USDA lookups supply vitamins and minerals. Without your own free USDA key they share a demo key limited to about 30 lookups an hour.</p>
+      <ul class="evidence-list"><li><a href="https://api.data.gov/signup/" target="_blank" rel="noreferrer">Get a free USDA FoodData Central key (name and email only)</a></li></ul>
+      <label>USDA FoodData Central key<input name="foodDataCentralApiKey" type="password" autocomplete="off" value="${escapeHtml(settings.foodDataCentralApiKey)}"></label>
+      <details class="stack"><summary>Anthropic (optional, paid)</summary>
         <label>Anthropic API key<input name="anthropicApiKey" type="password" autocomplete="off" value="${escapeHtml(settings.anthropicApiKey)}"></label>
         <label>Claude model<input name="model" type="text" value="${escapeHtml(settings.model)}"></label>
-        <p class="muted">Without your own FoodData Central key, USDA lookups use a shared demo key that allows about 30 an hour.</p>
-        <ul class="evidence-list"><li><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">Create an Anthropic API key</a></li><li><a href="https://api.data.gov/signup/" target="_blank" rel="noreferrer">Get a free FoodData Central API key</a></li></ul>
-        <label>FoodData Central API key<input name="foodDataCentralApiKey" type="password" autocomplete="off" value="${escapeHtml(settings.foodDataCentralApiKey)}"></label>
+        <ul class="evidence-list"><li><a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">Create an Anthropic API key</a></li></ul>
       </details>
       ${formNotice(ui, 'save-integrations')}<button class="secondary-button" type="submit">Save integrations</button></form>
     <form class="card stack" data-action="save-cloud"><div><h2>Cloud backup</h2><p class="muted">Backs up your history to a private GitHub repository after every change, restores it on a new phone, and picks up entries added for you there. The app keeps working offline. Your token is saved only on this device and is never included in backups or exports.</p></div>

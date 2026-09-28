@@ -180,7 +180,7 @@ function applyStatedNutrients(draft, stated) {
     assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
+export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
@@ -219,7 +219,13 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     let candidates = [];
     let lookupError;
     try {
-      candidates = rankCandidates(component, await searchFoods(component.usdaSearch, settings?.foodDataCentralApiKey, fetchFn, { signal }));
+      // Remembered answers keep repeat foods from spending the shared USDA key's small hourly allowance.
+      let foods = searchCache?.get?.(component.usdaSearch);
+      if (!foods) {
+        foods = await searchFoods(component.usdaSearch, settings?.foodDataCentralApiKey, fetchFn, { signal });
+        searchCache?.set?.(component.usdaSearch, foods);
+      }
+      candidates = rankCandidates(component, foods);
     } catch (error) {
       if (error.code === 'cancelled') throw error;
       if (!(error instanceof AnalysisError)) throw error;

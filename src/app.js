@@ -232,12 +232,32 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       totalServings: result.totalServings,
       recipeTotal: result.recipeTotal,
       labelBasis: result.labelBasis,
+      usdaProblems: result.components.filter(component => component.lookupError).map(component => ({ name: component.name, error: component.lookupError })),
       components: result.components.map(component => ({ name: component.name, grams: component.estimatedGrams,
         source: component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
     } };
     state.analysis = null;
     render();
   }
+
+  // USDA search results kept on this device for 30 days (a convenience cache, not tracker data).
+  const USDA_CACHE_KEY = 'usdaSearchCache';
+  const searchCache = {
+    read() {
+      try { return JSON.parse(globalThis.localStorage?.getItem(USDA_CACHE_KEY) ?? '{}'); } catch { return {}; }
+    },
+    get(query) {
+      const hit = this.read()[String(query).toLowerCase()];
+      return hit && clock().getTime() - hit.at < 30 * 86400000 ? hit.foods : undefined;
+    },
+    set(query, foods) {
+      try {
+        const entries = Object.entries({ ...this.read(), [String(query).toLowerCase()]: { at: clock().getTime(), foods } })
+          .sort((left, right) => right[1].at - left[1].at).slice(0, 150);
+        globalThis.localStorage?.setItem(USDA_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+      } catch { /* The cache is optional. */ }
+    }
+  };
 
   async function startAnalysis({ kind = 'auto', text, image, clarificationHistory = [] } = {}) {
     analysisController?.abort();
@@ -250,7 +270,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
     try {
       const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
-        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal });
+        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache });
       if (generation !== analysisGeneration) return;
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
