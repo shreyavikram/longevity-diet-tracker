@@ -150,7 +150,8 @@ function labelComponentQuestion(components) {
 export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
-  const labelKind = kind === 'labelPhoto' || (kind === 'auto' && Boolean(image));
+  // Label questions apply to any trusted nutrition facts: a label photo, or a product page Google read.
+  const labelKind = kind === 'labelPhoto' || (kind === 'auto' && Object.keys(parsed.labelNutrients ?? {}).length > 0);
   if (kind === 'recipe' && !parsed.totalServings) {
     const answered = answeredNumber(clarificationHistory, 'totalServings', 'servings?');
     if (!answered) return { status: 'needs_clarification', questions: [{ id: 'totalServings', prompt: 'How many servings does the full recipe make?' }] };

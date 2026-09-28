@@ -18,6 +18,7 @@ const confidence = value => ['high', 'medium', 'low'].includes(value);
 const validStringArray = value => Array.isArray(value) && value.length <= 30 && value.every(nonempty);
 const VALID_KINDS = new Set(['auto', 'description', 'recipe', 'foodPhoto', 'labelPhoto']);
 const FALLBACK_KEYS = new Set(['calories', 'proteinG', 'carbsG', 'fatG', 'fiberG']);
+const LINK_PATTERN = /https?:\/\/\S+/i;
 const NUTRIENT_DEFINITIONS = [...new Map([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => [item.key, item])).values()];
 const NUTRIENT_KEYS = new Set(NUTRIENT_DEFINITIONS.map(item => item.key));
 
@@ -37,14 +38,24 @@ function geminiText(payload) {
   }
   const parts = candidate?.content?.parts;
   if (!Array.isArray(parts)) throw invalid();
-  return parts.filter(part => typeof part?.text === 'string' && !part.thought).map(part => part.text).join('');
+  return {
+    text: parts.filter(part => typeof part?.text === 'string' && !part.thought).map(part => part.text).join(''),
+    // True only when Google confirms it actually read a linked page.
+    linkRead: Boolean(candidate.urlContextMetadata?.urlMetadata?.some(item => item?.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS'))
+  };
 }
 
 function parseResponse(rawText) {
   const raw = String(rawText).trim();
   const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
   let parsed;
-  try { parsed = JSON.parse(json); } catch { throw invalid(); }
+  try { parsed = JSON.parse(json); } catch {
+    // With the link reader on, Gemini may wrap the JSON in a sentence; read the one object inside.
+    const start = json.indexOf('{');
+    const end = json.lastIndexOf('}');
+    try { parsed = JSON.parse(json.slice(start, end + 1)); } catch { throw invalid(); }
+    if (start < 0) throw invalid();
+  }
   if (parsed?.status === 'needs_clarification') {
     if (!exactKeys(parsed, ['status', 'questions']) || !Array.isArray(parsed.questions)
       || !parsed.questions.length || parsed.questions.length > 5 || !parsed.questions.every(question =>
@@ -86,6 +97,7 @@ Return exactly one state. If a material unknown (oil, quantity, fortified milk, 
 Otherwise return {"status":"estimate","name":"Food name","servingLabel":"1 bowl","components":[{"name":"ingredient","householdAmount":"1 cup","estimatedGrams":200,"usdaSearch":"specific USDA search","confidence":"medium","fallbackNutrients":{"calories":250,"proteinG":10,"carbsG":30,"fatG":8,"fiberG":4}}],"confidence":"medium","assumptions":[]}.
 Each component's "usdaSearch" is a USDA FoodData Central search that keeps every qualifier that changes nutrition (vegan, plant-based, brand, cooked or raw, fat level). Each component's optional "fallbackNutrients" is your best estimate for that component's whole household amount, using only calories, proteinG, carbsG, fatG and fiberG; it is used only when no USDA record matches.
 When "kind" is "auto", decide yourself whether the input is a meal, a recipe, or a photographed nutrition label.
+If the description contains a product link, read the page to identify the exact product. If the page shows nutrition facts, transcribe them exactly into "labelNutrients" per printed serving with "labelServingGrams", just as for a label photo, and note in assumptions that they came from the product page. If you cannot read the page, do not guess its nutrition from the link text: use the product name, and say in assumptions that the page could not be read.
 For a recipe that makes more than one serving, include "totalServings": a positive number. For a clear photographed nutrition label only, you may add "labelNutrients" with exact transcribed values per printed label serving, a positive "labelServingGrams", and "labelComponentIndex": the zero-based index of the one component described by the photographed product label. Never apply label values to a whole prepared mixture containing other ingredients. If the label component or printed serving grams cannot be identified, ask a clarification question. Allowed labelNutrients keys and units: ${NUTRIENT_DEFINITIONS.map(item => `${item.key} (${item.unit})`).join(', ')}. Never infer or invent micronutrients or supplement doses. State assumptions explicitly. Allowed confidence: high, medium, low. No other fields.`;
 
 function bytesToBase64(bytes) {
@@ -125,7 +137,7 @@ async function callAnthropic({ settings, image, imageData, userText, fetchFn, si
   }
   let payload;
   try { payload = await response.json(); } catch { throw invalid(); }
-  return anthropicText(payload);
+  return { text: anthropicText(payload), linkRead: false };
 }
 
 // Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
@@ -138,8 +150,10 @@ async function callGemini({ settings, image, imageData, userText, fetchFn, signa
   const parts = [];
   if (image) parts.push({ inlineData: { mimeType: image.type, data: imageData } });
   parts.push({ text: userText });
+  // Google's link reader is turned on only for entries with a link; tools and strict JSON mode are not combined.
+  const hasLink = systemPrompt === SYSTEM_PROMPT && LINK_PATTERN.test(userText);
   const body = JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt }] }, contents: [{ role: 'user', parts }],
-    generationConfig: { responseMimeType: 'application/json' } });
+    ...(hasLink ? { tools: [{ url_context: {} }], generationConfig: {} } : { generationConfig: { responseMimeType: 'application/json' } }) });
   const attempt = name => fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(name)}:generateContent`, {
     method: 'POST',
     headers: { 'x-goog-api-key': settings.geminiApiKey, 'content-type': 'application/json' },
@@ -204,8 +218,16 @@ export async function requestAnalysis({ kind, text = '', image, clarificationHis
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients });
     const call = provider === 'gemini' ? callGemini : callAnthropic;
-    const parsed = parseResponse(await call({ settings, image, imageData, userText, fetchFn, signal, wait }));
-    const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && Boolean(image));
+    const reply = await call({ settings, image, imageData, userText, fetchFn, signal, wait });
+    const parsed = parseResponse(reply.text);
+    const hasLink = LINK_PATTERN.test(text);
+    const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && (Boolean(image) || reply.linkRead));
+    // Nutrition facts said to come from a link Google could not read are not trusted.
+    if (!labelAllowed && kind === 'auto' && hasLink) {
+      delete parsed.labelNutrients;
+      delete parsed.labelServingGrams;
+      delete parsed.labelComponentIndex;
+    }
     if (!labelAllowed && (parsed.labelNutrients !== undefined || parsed.labelServingGrams !== undefined || parsed.labelComponentIndex !== undefined)) throw invalid();
     return parsed;
   } catch (error) {
@@ -227,8 +249,8 @@ export async function requestMatchChoice({ components, settings, fetchFn = globa
   if (!listed.length) return new Map();
   try {
     const call = provider === 'gemini' ? callGemini : callAnthropic;
-    const raw = String(await call({ settings, image: null, imageData: null, userText: JSON.stringify({ ingredients: listed }),
-      fetchFn, signal, wait, systemPrompt: MATCH_PROMPT })).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const raw = String((await call({ settings, image: null, imageData: null, userText: JSON.stringify({ ingredients: listed }),
+      fetchFn, signal, wait, systemPrompt: MATCH_PROMPT })).text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     let parsed;
     try { parsed = JSON.parse(raw); } catch { throw invalid(); }
     if (!exactKeys(parsed, ['choices']) || !Array.isArray(parsed.choices)) throw invalid();
