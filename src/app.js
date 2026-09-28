@@ -142,7 +142,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: localDate(clock()), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, coverageOpen: false, installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, coverageOpen: false, addText: '', photoKept: false, installStatus: '', canInstall: false, updateReady: false };
   const waterUndo = new Map();
   let listenersBound = false;
   let idSequence = 0;
@@ -152,9 +152,31 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   let analysisImage = null;
   let pwa = null;
 
+  // The entry being worked on (its text and in-memory photo) is kept until it is logged, saved, or discarded,
+  // so a wrong suggestion can go back to the text box.
+  function clearEntry() {
+    analysisImage = null;
+    state.photoKept = false;
+    state.addText = '';
+  }
+
+  function editAnalysisInput() {
+    const text = state.draft?.item?.analysis?.input?.text ?? state.analysis?.text ?? '';
+    analysisGeneration += 1;
+    analysisController?.abort();
+    analysisController = null;
+    state.analysis = null;
+    state.draft = null;
+    state.addText = text;
+    state.photoKept = Boolean(analysisImage);
+    state.route = 'add';
+    render();
+    resetScroll();
+  }
+
   function cancelAnalysis() {
     analysisGeneration += 1;
-    analysisImage = null;
+    clearEntry();
     analysisController?.abort();
     analysisController = null;
     state.analysis = null;
@@ -231,10 +253,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
         render();
-      } else {
-        analysisImage = null;
-        openAnalysisReview(result.draft, input);
-      }
+      } else openAnalysisReview(result.draft, input);
     } catch (error) {
       if (generation !== analysisGeneration) return;
       state.analysis = { status: 'error', ...input,
@@ -878,6 +897,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         openLogEntry(action.entryId);
         break;
       case 'CLOSE_CONFIRMATION':
+        if (state.draft?.mode === 'analysis') clearEntry();
         state.draft = null;
         break;
       case 'SET_LIBRARY_QUERY':
@@ -988,6 +1008,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     state.draft = null;
     state.notice = null;
     state.dataStatus = '';
+    clearEntry();
     render();
     resetScroll();
     focusHeading();
@@ -1002,6 +1023,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'apply-update') dispatch({ type: 'APPLY_UPDATE' });
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
+    if (control.dataset.action === 'edit-analysis-input') editAnalysisInput();
+    if (control.dataset.action === 'remove-analysis-photo') {
+      analysisImage = null;
+      state.photoKept = false;
+      render();
+    }
     if (['open-library-item', 'edit-library-item'].includes(control.dataset.action)) {
       dispatch({ type: 'OPEN_LIBRARY_ITEM', itemId: control.dataset.itemId });
     }
@@ -1134,7 +1161,13 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         });
       }
       case 'analyze-food':
-        return startAnalysis({ kind: 'auto', text: formData.get('text'), image: formData.get('image')?.size ? formData.get('image') : null });
+      {
+        const chosen = formData.get('image')?.size ? formData.get('image') : null;
+        const keep = !chosen && state.photoKept;
+        state.photoKept = false;
+        state.addText = String(formData.get('text') ?? '');
+        return startAnalysis({ kind: 'auto', text: formData.get('text'), image: keep ? undefined : chosen });
+      }
       case 'retry-analysis':
         if (state.analysis?.status === 'error') return startAnalysis({ kind: state.analysis.kind, text: state.analysis.text,
           clarificationHistory: state.analysis.clarificationHistory });
@@ -1210,6 +1243,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         if (intent === 'save') {
           dispatch({ type: 'SAVE_LIBRARY_ITEM', item });
           state.draft = null;
+          clearEntry();
           state.route = 'library';
           render();
         } else if (intent === 'log' || intent === 'complete') {
@@ -1233,6 +1267,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
             dispatch({ type: 'LOG_ITEM', date: state.selectedDate, item, servings });
           }
           state.draft = null;
+          clearEntry();
           state.route = 'today';
           render();
         } else {
