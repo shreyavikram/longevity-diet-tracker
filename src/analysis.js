@@ -147,6 +147,22 @@ function labelComponentQuestion(components) {
       label: `${component.name}, ${component.householdAmount} (${component.estimatedGrams} g)` })) }] };
 }
 
+// Plain water adds nothing tracked, but its USDA record omits most nutrients, and a nutrient is known for a
+// mixture only when every ingredient reports it. Listing water would erase the rest of the shake's nutrients.
+const PLAIN_WATER = /^(?:plain|tap|filtered|still|sparkling|bottled|cold|hot|warm|mineral)?\s*(?:water|ice)(?:\s*,?\s*(?:tap|plain|filtered|bottled))?$/i;
+
+function dropPlainWater(parsed) {
+  const isWater = component => PLAIN_WATER.test(component.name.trim()) || PLAIN_WATER.test(component.usdaSearch.trim());
+  const kept = parsed.components.filter(component => !isWater(component));
+  if (!kept.length || kept.length === parsed.components.length) return;
+  if (Number.isInteger(parsed.labelComponentIndex)) {
+    const labelled = parsed.components[parsed.labelComponentIndex];
+    parsed.labelComponentIndex = labelled && kept.includes(labelled) ? kept.indexOf(labelled) : undefined;
+  }
+  parsed.components = kept;
+  parsed.assumptions = [...parsed.assumptions, 'Plain water is not counted; it adds no calories or tracked nutrients.'];
+}
+
 // Nutrition numbers the person typed override every other source for that nutrient, per serving.
 function applyStatedNutrients(draft, stated) {
   if (!stated || !Object.keys(stated).length) return draft;
@@ -167,6 +183,7 @@ function applyStatedNutrients(draft, stated) {
 export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
+  dropPlainWater(parsed);
   // Label questions apply to any trusted nutrition facts: a label photo, or a product page Google read.
   const labelKind = kind === 'labelPhoto' || (kind === 'auto' && Object.keys(parsed.labelNutrients ?? {}).length > 0);
   if (kind === 'recipe' && !parsed.totalServings) {

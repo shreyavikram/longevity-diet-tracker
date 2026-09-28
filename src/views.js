@@ -357,7 +357,8 @@ function renderLibrary({ data, state }) {
 
 function renderAdd({ data, state }) {
   const serviceName = analysisProvider(data.settings) === 'anthropic' ? 'Anthropic' : 'Google Gemini';
-  const recent = sortedLibrary(data.library).filter(item => item.type !== 'supplement').slice(0, 5);
+  // Items with no nutrition yet (such as the unfilled Huel placeholders) are kept out of one-tap adding.
+  const recent = sortedLibrary(data.library).filter(item => item.type !== 'supplement' && hasKnownNutrition(item)).slice(0, 5);
   const analysis = state.analysis;
   const analysisContent = analysis?.status === 'loading'
     ? `<section class="card stack" role="status" aria-live="polite"><h2>Analyzing</h2><p>${escapeHtml(serviceName)} is reading your entry and checking USDA records. This usually takes a few seconds, or up to 15 when Gemini is busy.</p><button class="secondary-button" type="button" data-action="cancel-analysis">Cancel</button></section>`
@@ -392,6 +393,8 @@ function nutrientInput(definition, item) {
     ${sourceDetails ? `<small class="muted">${escapeHtml(sourceDetails)}</small>` : ''}
   </fieldset>`;
 }
+
+const hasKnownNutrition = item => REVIEW_NUTRIENTS.some(definition => Number.isFinite(nutrientValue(item.perServing ?? {}, definition)));
 
 function macroLine(perServing = {}) {
   const parts = MACRO_NUTRIENTS.map(definition => {
@@ -437,6 +440,7 @@ function renderConfirmation({ data, state, ui = {} }) {
       <section class="card stack review-summary">
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
         <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>
+        ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit details, or analyze a photo of its label, before adding it.</p>'}
         <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
@@ -446,7 +450,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         ? `<button class="primary-button full-width" type="submit" name="intent" value="complete">Mark complete for ${escapeHtml(dateLabel(state.selectedDate))}</button>`
         : `<button class="primary-button full-width" type="submit" name="intent" value="log">${draft.mode === 'logEdit' ? 'Save changes to' : 'Add to'} ${escapeHtml(dateLabel(state.selectedDate))}</button>`}<button class="secondary-button full-width" type="submit" name="intent" value="save">Save to Library</button></div>
       </section>
-      <details class="card stack review-details"${draft.mode === 'manual' ? ' open' : ''}>
+      <details class="card stack review-details"${draft.mode === 'manual' || !hasKnownNutrition(item) ? ' open' : ''}>
         <summary>Edit details</summary>
         ${recipeReview}
         <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
