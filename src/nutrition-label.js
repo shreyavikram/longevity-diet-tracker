@@ -72,7 +72,8 @@ function resolveMacros(nutrients, options) {
 
 export function parseNutritionLabel(input) {
   const text = String(input ?? '').replace(/[•·|]/g, '\n').replace(/[ \t]+/g, ' ');
-  const kind = /supplement\s+facts/i.test(text) ? 'supplement' : /nutrition\s+facts/i.test(text) ? 'nutrition' : null;
+  const kind = /supplement\s+facts/i.test(text) ? 'supplement'
+    : /nutrition(?:al)?\s+(?:facts|info(?:rmation)?)|amount\s+per\s+serving|%\s*daily\s+value/i.test(text) ? 'nutrition' : null;
   const nutrients = {};
 
   const calories = /calories\s*:?\s*(\d[\d,]*)/i.exec(text);
@@ -113,8 +114,9 @@ export function parseNutritionLabel(input) {
   }
 
   const macros = ['fatG', 'carbsG', 'proteinG'].filter(key => key in nutrients).length;
-  const isLabel = kind === 'supplement' ? Object.keys(nutrients).length > 0
-    : Number.isFinite(nutrients.calories) && (macros >= 2 || (kind === 'nutrition' && macros >= 1));
+  // With a label heading, anything read counts (the review shows what is missing); without one, it takes
+  // calories and two macros to tell a label from a description of a meal.
+  const isLabel = kind ? Object.keys(nutrients).length > 0 : Number.isFinite(nutrients.calories) && macros >= 2;
   if (!isLabel) return null;
 
   const serving = /serving\s+size\s*:?\s*([^\n]+)/i.exec(text);

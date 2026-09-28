@@ -206,16 +206,23 @@ function labelTextDraft(label, text) {
     labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText }) {
+export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
   const typedLabel = parseNutritionLabel(text);
   if (typedLabel) return { status: 'estimate', draft: labelTextDraft(typedLabel, text) };
+  // How the on-device reader did, kept with the entry so slow or failed reads on the phone can be checked later.
+  let labelReader = null;
   if (image && recognizeText && !clarificationHistory.length) {
+    onStage('reading-label');
+    const started = Date.now();
     let recognized = '';
-    try { recognized = await recognizeText(image, { signal }); } catch { recognized = ''; }
+    let failure = null;
+    try { recognized = await recognizeText(image, { signal }); } catch (error) { failure = String(error?.message ?? error).slice(0, 200); }
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     const photoLabel = parseNutritionLabel(recognized);
-    if (photoLabel) return { status: 'estimate', draft: labelTextDraft(photoLabel, text) };
+    labelReader = { ms: Date.now() - started, found: Boolean(photoLabel), characters: recognized.length, ...(failure ? { error: failure } : {}) };
+    if (photoLabel) return { status: 'estimate', draft: { ...labelTextDraft(photoLabel, text), labelReader } };
   }
+  onStage('asking-ai');
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
@@ -311,5 +318,5 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     labelComponentIndex: parsed.labelComponentIndex
   });
   const draft = applyStatedNutrients(resolved, parsed.statedNutrients);
-  return { status: 'estimate', draft };
+  return { status: 'estimate', draft: labelReader ? { ...draft, labelReader } : draft };
 }

@@ -196,6 +196,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       analyzedAt: clock().toISOString(),
       provider,
       ...(result.method ? { method: result.method } : {}),
+      ...(result.labelReader ? { labelReader: clone(result.labelReader) } : {}),
       model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
       input: { text: input.text, hadPhoto: Boolean(input.hadPhoto) },
       clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
@@ -274,7 +275,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
     try {
       const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
-        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText });
+        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText,
+        onStage: stage => {
+          if (generation !== analysisGeneration || state.analysis?.status !== 'loading') return;
+          state.analysis = { ...state.analysis, stage };
+          render();
+        } });
       if (generation !== analysisGeneration) return;
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
@@ -1171,6 +1177,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   function handleChange(event) {
     const form = event.target.closest?.('form[data-action]');
     if (!form) return;
+    // Start the label reader while the person finishes typing, so it is ready when they tap Analyze.
+    if (form.dataset.action === 'analyze-food' && event.target.name === 'image' && event.target.files?.length) recognizeText.warm?.();
     if (form.dataset.action === 'confirm-item'
       && event.target.name === 'type'
       && state.draft?.mode !== 'logEdit') {
