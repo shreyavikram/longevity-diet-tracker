@@ -521,6 +521,24 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }));
   }
 
+  // Starring a logged meal saves it (one serving, as logged) as a Library favorite and links the entry to it;
+  // starring again only changes the favorite flag. The logged amounts never change.
+  function toggleLogFavorite({ date, entryId }) {
+    const entry = (store.get('log')[date] ?? []).find(candidate => candidate.id === entryId);
+    if (!entry) throw new Error('That meal is no longer logged.');
+    const existing = entry.itemId ? store.get('library').find(item => item.id === entry.itemId) : null;
+    if (existing) {
+      saveLibraryItem({ ...existing, favorite: !existing.favorite });
+      return;
+    }
+    const item = { id: nextId('library'), type: entry.type, name: entry.name, servingLabel: entry.servingLabel,
+      perServing: clone(entry.perServing ?? {}), provenance: clone(entry.provenance ?? {}), confidence: entry.confidence ?? null,
+      assumptions: clone(entry.assumptions ?? []), components: clone(entry.components ?? []), favorite: true, verified: false,
+      ...(entry.analysis ? { analysis: clone(entry.analysis) } : {}) };
+    saveLibraryItem(item);
+    updateDatedMap('log', date, entries => (entries ?? []).map(candidate => candidate.id === entryId ? { ...candidate, itemId: item.id } : candidate));
+  }
+
   function toggleSupplement(action) {
     const item = store.get('library').find(candidate => candidate.id === action.itemId);
     if (!item || item.type !== 'supplement') throw new Error(`Supplement not found: ${action.itemId}`);
@@ -872,6 +890,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'DELETE_LOG_ENTRY':
         updateDatedMap('log', action.date, entries => (entries ?? []).filter(entry => entry.id !== action.entryId));
         break;
+      case 'TOGGLE_LOG_FAVORITE':
+        toggleLogFavorite(action);
+        break;
       case 'TOGGLE_SUPPLEMENT':
         toggleSupplement(action);
         break;
@@ -1038,6 +1059,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
     if (control.dataset.action === 'delete-library-item') {
       dispatch({ type: 'DELETE_LIBRARY_ITEM', itemId: control.dataset.itemId });
+    }
+    if (control.dataset.action === 'favorite-log-entry') {
+      dispatch({ type: 'TOGGLE_LOG_FAVORITE', date: state.selectedDate, entryId: control.dataset.entryId });
     }
     if (control.dataset.action === 'edit-log-entry') {
       dispatch({ type: 'OPEN_LOG_ENTRY', entryId: control.dataset.entryId });

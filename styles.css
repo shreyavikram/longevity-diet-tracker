@@ -394,3 +394,5 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .review-details > summary { font-size: 1.05rem; }
 .review-details[open] > summary { margin-bottom: 8px; }
 .kept-photo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0; }
+.favorite-toggle { font-size: 1.25rem; line-height: 1; }
+.favorite-toggle[aria-pressed="true"] { color: #8a6a00; }

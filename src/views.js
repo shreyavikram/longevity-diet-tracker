@@ -209,10 +209,12 @@ export function renderTargetCards(targets, { showDerivation = true } = {}) {
 function renderLogEntries(data, selectedDate) {
   const entries = data.log[selectedDate] ?? [];
   if (!entries.length) return '<p class="muted">No meals logged for this date yet.</p>';
-  return `<ul class="plain-list">${entries.map(entry => `<li><span><strong>${escapeHtml(entry.name)}</strong><small>${format(entry.servings, 2)} × ${escapeHtml(entry.servingLabel)}</small></span><span>
+  const favorites = new Set(data.library.filter(item => item.favorite).map(item => item.id));
+  return `<ul class="plain-list">${entries.map(entry => { const favorite = favorites.has(entry.itemId); return `<li><span><strong>${escapeHtml(entry.name)}</strong><small>${format(entry.servings, 2)} × ${escapeHtml(entry.servingLabel)}</small></span><span>
+    <button class="quiet-button icon-button favorite-toggle" type="button" data-action="favorite-log-entry" data-entry-id="${escapeHtml(entry.id)}" aria-pressed="${favorite}" aria-label="${favorite ? `Remove ${escapeHtml(entry.name)} from favorites` : `Save ${escapeHtml(entry.name)} as a favorite`}">${favorite ? '★' : '☆'}</button>
     <button class="quiet-button" type="button" data-action="edit-log-entry" data-entry-id="${escapeHtml(entry.id)}">Edit</button>
     <button class="quiet-button" type="button" data-action="delete-log-entry" data-entry-id="${escapeHtml(entry.id)}" aria-label="Delete ${escapeHtml(entry.name)} from ${escapeHtml(dateLabel(selectedDate))}">Delete</button>
-  </span></li>`).join('')}</ul>`;
+  </span></li>`; }).join('')}</ul>`;
 }
 
 function renderSupplementSchedule(data, selectedDate) {
