@@ -18,6 +18,7 @@ function loadScript(documentRef, src) {
 }
 
 // Large phone photos are scaled down (text recognition gets slow and no more accurate above ~2000 px).
+// Small images are left as they are: upscaling them made recognition worse in testing.
 async function prepare(image, documentRef) {
   if (typeof createImageBitmap !== 'function') return image;
   const bitmap = await createImageBitmap(image);
@@ -46,6 +47,9 @@ export function createTextRecognizer({ documentRef = globalThis.document } = {})
       corePath: vendorUrl(documentRef),
       langPath: vendorUrl(documentRef)
     });
+    // Read row by row (mode 4). The default layout analysis splits website nutrition tables into a column of
+    // names and a separate column of numbers, which loses which number belongs to which nutrient.
+    await worker.setParameters({ tessedit_pageseg_mode: '4' });
     const stop = () => worker.terminate();
     signal?.addEventListener('abort', stop, { once: true });
     try {
