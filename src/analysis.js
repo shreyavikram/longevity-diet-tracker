@@ -201,6 +201,11 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     if (!answered) return { status: 'needs_clarification', questions: [{ id: 'totalServings', prompt: 'How many servings does the full recipe make?' }] };
     parsed.totalServings = answered;
   }
+  // A single labelled product with no printed gram weight uses the label's own serving as-is.
+  if (labelKind && Object.keys(parsed.labelNutrients ?? {}).length && parsed.components.length === 1
+    && (!Number.isFinite(parsed.labelServingGrams) || parsed.labelServingGrams <= 0)) {
+    parsed.labelServingGrams = parsed.components[0].estimatedGrams;
+  }
   if (labelKind && Object.keys(parsed.labelNutrients ?? {}).length
     && (!Number.isFinite(parsed.labelServingGrams) || parsed.labelServingGrams <= 0)) {
     const answered = answeredNumber(clarificationHistory, 'labelServingGrams', 'g|grams?');
@@ -226,20 +231,24 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
   }
   const components = [];
   for (const [index, component] of parsed.components.entries()) {
-    // A photographed or linked label is the truth for its own product; USDA is not consulted for it.
-    if (Object.keys(parsed.labelNutrients ?? {}).length && index === (parsed.labelComponentIndex ?? (parsed.components.length === 1 ? 0 : -1))) {
+    // With a photographed or linked label, only the label is read: no USDA or online lookups for any
+    // ingredient (others use the AI's own macro estimate).
+    if (Object.keys(parsed.labelNutrients ?? {}).length) {
       components.push({ ...component, candidates: [], selectedFdcId: null, matchResolved: true });
       continue;
     }
     let candidates = [];
     let lookupError;
-    // The on-device USDA copy answers generic foods; live USDA (with its hourly limit) is asked only when
-    // that copy has no record containing every search word, usually a brand-name product.
-    const local = localSearch ? await localSearch(component.usdaSearch) : null;
+    // The on-device USDA copy answers generic foods: every search word first, then most of them (the AI
+    // picks the right record or none). Live USDA is asked only with the person's own key and only when the
+    // copy has nothing close; the shared demo key's hourly limit makes it unreliable otherwise.
+    let local = localSearch ? await localSearch(component.usdaSearch) : null;
+    if (localSearch && !local?.length) local = await localSearch(component.usdaSearch, { minShare: 0.5 });
+    const liveAllowed = !localSearch || Boolean(String(settings?.foodDataCentralApiKey ?? '').trim());
     try {
       if (local?.length) {
         candidates = rankCandidates(component, local);
-      } else {
+      } else if (liveAllowed) {
         // Remembered answers keep repeat foods from spending the shared USDA key's small hourly allowance.
         let foods = searchCache?.get?.(component.usdaSearch);
         if (!foods) {
@@ -252,13 +261,6 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
       if (error.code === 'cancelled') throw error;
       if (!(error instanceof AnalysisError)) throw error;
       lookupError = error.message;
-    }
-    if (!candidates.length && localSearch) {
-      const loose = await localSearch(component.usdaSearch, { minShare: 0.6 });
-      if (loose?.length) {
-        candidates = rankCandidates(component, loose);
-        lookupError = undefined;
-      }
     }
     components.push({ ...component, candidates: candidates.slice(0, 8), selectedFdcId: null, matchResolved: true,
       ...(lookupError ? { lookupError } : {}) });
