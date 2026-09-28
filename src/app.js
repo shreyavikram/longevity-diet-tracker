@@ -336,6 +336,13 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
   }
 
+  // How much of today's eating day (7 am to 9 pm) has passed; other days count as complete.
+  function dayProgress() {
+    const now = clock();
+    if (state.selectedDate !== localDate(now)) return 1;
+    return Math.min(1, Math.max(0.05, (now.getHours() + now.getMinutes() / 60 - 7) / 14));
+  }
+
   function render() {
     const root = getRoot();
     if (!root) return;
@@ -348,7 +355,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       computedTargets,
       effectiveTargets: resolveEffectiveTargets(data.targets),
       ui: { canUndoWater: (waterUndo.get(state.selectedDate)?.length ?? 0) > 0,
-        dataStatus: state.dataStatus, notice: state.notice, cloudStatus: state.cloudStatus, ...pwaUi() }
+        dataStatus: state.dataStatus, notice: state.notice, cloudStatus: state.cloudStatus, dayProgress: dayProgress(), ...pwaUi() }
     });
     restoreFocus(focused);
     schedulePush();

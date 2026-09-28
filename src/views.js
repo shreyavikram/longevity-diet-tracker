@@ -9,6 +9,7 @@ import {
 import {
   cmToIn,
   dailySummary,
+  macroStatus,
   isSupplementScheduled,
   kgToLb,
   mlToFlOz,
@@ -309,6 +310,13 @@ function renderToday(data, state, ui = {}) {
   const calories = daily.calories.knownTotal;
   const targetCalories = daily.targets?.calories ?? 0;
   const remaining = daily.remainingCalories;
+  const dayProgress = ui.dayProgress ?? 1;
+  const statusOf = (value, target, kind = 'minimum') => macroStatus({ value, target, kind, dayProgress });
+  const statusClass = status => status ? ` class="macro-status status-${status.level}"` : '';
+  const statusFlag = status => status ? `<em class="flag">${escapeHtml(`${status.symbol} ${status.label}`)}</em>` : '';
+  const proteinStatus = statusOf(protein.total, protein.target);
+  const calorieStatus = daily.calories.complete ? statusOf(calories, targetCalories, 'calories') : null;
+  const waterStatus = statusOf(daily.waterMl, daily.targets?.waterMl);
   const macros = [
     ['Fiber', fiber.total, 'g', fiber.target],
     ['Carbohydrate', daily.nutrients.carbsG, 'g', null],
@@ -327,8 +335,8 @@ function renderToday(data, state, ui = {}) {
     <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div>${trainingControl}</div>
     ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${Number.isFinite(workout.minutes) ? ` · ${escapeHtml(workout.minutes)} min` : ''}`).join('; ')}</p>` : ''}
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
-    <section class="card" aria-labelledby="protein-calories-heading"><h2 id="protein-calories-heading">Protein and calories</h2><div class="primary-metrics"><article><span>Protein</span><strong>${escapeHtml(formatNutrient(protein.total, 'g'))}</strong><small>of ${escapeHtml(formatNutrient(protein.target, 'g'))}</small></article><article>${dailyCalorieCopy}</article></div><p class="weekly-budget">${weeklyCalorieCopy} The effective weekly average is ${escapeHtml(format(daily.targets?.averageCalories ?? 0))} kcal.</p></section>
-    <section class="card stack" aria-labelledby="secondary-metrics-heading"><h2 id="secondary-metrics-heading">Fiber, water, and macros</h2><div class="metric-grid">${macros.map(([label, value, unit, target]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatNutrient(value, unit))}</strong>${Number.isFinite(target) ? `<small>of ${escapeHtml(formatNutrient(target, unit))}</small>` : '<small>from known values</small>'}</article>`).join('')}<article><span>Water</span><strong>${escapeHtml(formatWater(daily.waterMl, data.settings.units))} logged</strong><small>of ${escapeHtml(formatWater(daily.targets?.waterMl ?? 0, data.settings.units))}</small></article></div><div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, data.settings.units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, data.settings.units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>
+    <section class="card" aria-labelledby="protein-calories-heading"><h2 id="protein-calories-heading">Protein and calories</h2><div class="primary-metrics"><article${statusClass(proteinStatus)}><span>Protein</span><strong>${escapeHtml(formatNutrient(protein.total, 'g'))}</strong><small>of ${escapeHtml(formatNutrient(protein.target, 'g'))}</small>${statusFlag(proteinStatus)}</article><article${statusClass(calorieStatus)}>${dailyCalorieCopy}${statusFlag(calorieStatus)}</article></div><p class="weekly-budget">${weeklyCalorieCopy} The effective weekly average is ${escapeHtml(format(daily.targets?.averageCalories ?? 0))} kcal.</p></section>
+    <section class="card stack" aria-labelledby="secondary-metrics-heading"><h2 id="secondary-metrics-heading">Fiber, water, and macros</h2><div class="metric-grid">${macros.map(([label, value, unit, target]) => { const status = Number.isFinite(target) ? statusOf(value, target) : null; return `<article${statusClass(status)}><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatNutrient(value, unit))}</strong>${Number.isFinite(target) ? `<small>of ${escapeHtml(formatNutrient(target, unit))}</small>` : '<small>from known values</small>'}${statusFlag(status)}</article>`; }).join('')}<article${statusClass(waterStatus)}><span>Water</span><strong>${escapeHtml(formatWater(daily.waterMl, data.settings.units))} logged</strong><small>of ${escapeHtml(formatWater(daily.targets?.waterMl ?? 0, data.settings.units))}</small>${statusFlag(waterStatus)}</article></div><div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, data.settings.units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, data.settings.units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>
     <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Logged meals</h2>${renderLogEntries(data, selectedDate)}</section>
     <button class="primary-button full-width add-action" type="button" data-action="navigate" data-route="add">Add food or supplement</button>
     <section class="card stack" aria-labelledby="today-supplements"><h2 id="today-supplements">Scheduled supplements</h2>${renderSupplementSchedule(data, selectedDate)}</section>

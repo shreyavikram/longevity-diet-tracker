@@ -439,3 +439,23 @@ export function weeklyCoverage(endDate, stores) {
     }
   };
 }
+
+// Traffic-light status for a day's macro against its goal (the user asked for red, yellow, and green).
+// For the current day, `dayProgress` (0 to 1) scales what counts as on track so mornings are not "behind".
+export function macroStatus({ value, target, kind, dayProgress = 1 }) {
+  if (!Number.isFinite(value) || !Number.isFinite(target) || target <= 0) return null;
+  const expected = target * Math.min(1, Math.max(0.05, dayProgress));
+  const ratio = value / expected;
+  const good = { level: 'good', label: 'On track', symbol: '✓' };
+  if (kind === 'calories') {
+    const ofTarget = value / target;
+    if (ofTarget > 1.15) return { level: 'behind', label: 'Over', symbol: '!' };
+    if (ofTarget > 1.05) return { level: 'close', label: 'A little over', symbol: '◐' };
+    if (ratio >= 0.85) return good;
+    if (ratio >= 0.7) return { level: 'close', label: 'A little under', symbol: '◐' };
+    return { level: 'behind', label: 'Under', symbol: '!' };
+  }
+  if (ratio >= 1) return good;
+  if (ratio >= 0.7) return { level: 'close', label: 'Close', symbol: '◐' };
+  return { level: 'behind', label: 'Behind', symbol: '!' };
+}

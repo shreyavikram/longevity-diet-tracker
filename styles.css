@@ -396,3 +396,12 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .kept-photo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0; }
 .favorite-toggle { font-size: 1.25rem; line-height: 1; }
 .favorite-toggle[aria-pressed="true"] { color: #8a6a00; }
+:root { --good-bg: #e3f3e8; --good-ink: #1d5e38; --close-bg: #fbf0cf; --close-ink: #6e4a00; --behind-bg: #fbe4e1; --behind-ink: #8f2a20; }
+.macro-status { border: 1px solid transparent; }
+.macro-status .flag { display: block; margin-top: 4px; font-size: .8rem; font-style: normal; font-weight: 800; }
+.status-good { border-color: var(--good-ink); background: var(--good-bg) !important; }
+.status-good .flag { color: var(--good-ink); }
+.status-close { border-color: #b88a1e; background: var(--close-bg) !important; }
+.status-close .flag { color: var(--close-ink); }
+.status-behind { border-color: var(--behind-ink); background: var(--behind-bg) !important; }
+.status-behind .flag { color: var(--behind-ink); }
