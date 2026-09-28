@@ -147,6 +147,23 @@ function labelComponentQuestion(components) {
       label: `${component.name}, ${component.householdAmount} (${component.estimatedGrams} g)` })) }] };
 }
 
+// Nutrition numbers the person typed override every other source for that nutrient, per serving.
+function applyStatedNutrients(draft, stated) {
+  if (!stated || !Object.keys(stated).length) return draft;
+  const perServing = structuredClone(draft.perServing);
+  const provenance = { ...draft.provenance };
+  for (const [key, value] of Object.entries(stated)) {
+    if (MICROS.has(key)) {
+      perServing.micros ??= {};
+      perServing.micros[key] = value;
+    } else perServing[key] = value;
+    provenance[key] = { source: 'manual', confidence: 'high' };
+  }
+  const note = 'Nutrition numbers you entered were used as written.';
+  return { ...draft, perServing, provenance, statedNutrients: { ...stated },
+    assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
+}
+
 export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
@@ -202,7 +219,7 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     if (error.code === 'cancelled') throw error;
   }
   for (const [index, component] of components.entries()) component.selectedFdcId = choices.get(index) ?? null;
-  const draft = resolveDraft({
+  const resolved = resolveDraft({
     kind,
     name: parsed.name,
     servingLabel: parsed.servingLabel,
@@ -214,5 +231,6 @@ export async function analyzeInput({ kind, text = '', image, clarificationHistor
     labelServingGrams: parsed.labelServingGrams ?? null,
     labelComponentIndex: parsed.labelComponentIndex
   });
+  const draft = applyStatedNutrients(resolved, parsed.statedNutrients);
   return { status: 'estimate', draft };
 }
