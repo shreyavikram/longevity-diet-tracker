@@ -406,6 +406,29 @@ function nutrientInput(definition, item) {
 
 const hasKnownNutrition = item => REVIEW_NUTRIENTS.some(definition => Number.isFinite(nutrientValue(item.perServing ?? {}, definition)));
 
+const scaledForDisplay = (value, factor) => typeof value === 'number' ? value * factor
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, scaledForDisplay(inner, factor)])) : value;
+
+// The total for the servings being logged, shown under the servings question and updated as it changes.
+export function servingsTotalText(perServing, servings) {
+  const amount = Number(servings);
+  if (!Number.isFinite(amount) || amount <= 0) return 'Enter how many servings you had.';
+  return `You'll log: ${macroLine(scaledForDisplay(perServing ?? {}, amount))}`;
+}
+
+const SERVING_CHOICES = [[0.5, '½'], [1, '1'], [1.5, '1½'], [2, '2']];
+
+function servingsQuestion(item, servings) {
+  const packaged = item.type === 'packaged';
+  const current = Number(servings ?? 1);
+  return `<fieldset class="servings-question stack"><legend>${packaged ? 'How many servings did you have?' : 'Servings'}</legend>
+    ${item.servingLabel ? `<p class="muted">1 serving = ${escapeHtml(item.servingLabel)}</p>` : ''}
+    ${packaged ? `<div class="serving-choices">${SERVING_CHOICES.map(([value, label]) => `<button class="secondary-button" type="button" data-action="set-servings" data-servings="${value}" aria-pressed="${current === value}" aria-label="${value} serving${value === 1 ? '' : 's'}">${label}</button>`).join('')}</div>` : ''}
+    <label>${packaged ? 'Or type an amount' : 'Servings'}<input name="servings" type="number" min="0.05" step="any" inputmode="decimal" value="${escapeHtml(servings ?? 1)}" required></label>
+    <p class="muted" data-servings-total aria-live="polite">${escapeHtml(servingsTotalText(item.perServing, current))}</p>
+  </fieldset>`;
+}
+
 function macroLine(perServing = {}) {
   const parts = MACRO_NUTRIENTS.map(definition => {
     const value = nutrientValue(perServing, definition);
@@ -456,7 +479,7 @@ function renderConfirmation({ data, state, ui = {} }) {
     <form class="stack" data-action="confirm-item">
       <section class="card stack review-summary">
         <label>Name<input name="name" required value="${escapeHtml(item.name ?? '')}"></label>
-        <label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>
+        ${item.type === 'supplement' ? `<label>Servings<input name="servings" type="number" min="0.25" step="0.25" inputmode="decimal" value="${escapeHtml(draft.servings ?? 1)}" required></label>` : servingsQuestion(item, draft.servings)}
         ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values under Edit details, or analyze a photo of its label, before adding it.</p>'}
         ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are unknown. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
         <p class="review-totals"><strong>Per serving:</strong> ${escapeHtml(macroLine(item.perServing))}</p>

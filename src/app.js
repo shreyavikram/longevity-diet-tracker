@@ -17,7 +17,7 @@ import {
   scaleNutrients
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
-import { renderApp, renderInstallStatus, renderUpdateBanner } from './views.js';
+import { renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
 import { analyzeInput } from './analysis.js';
 import { createTextRecognizer } from './ocr.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
@@ -1079,6 +1079,11 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
     if (control.dataset.action === 'edit-analysis-input') editAnalysisInput();
+    if (control.dataset.action === 'set-servings') {
+      const input = control.form?.elements?.namedItem?.('servings');
+      if (input) input.value = control.dataset.servings;
+      updateServingsTotal(control.form);
+    }
     if (control.dataset.action === 'sync-cloud') return cloud.syncNow();
     if (control.dataset.action === 'remove-analysis-photo') {
       analysisImage = null;
@@ -1145,6 +1150,22 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'close-nutrient-details') {
       dispatch({ type: 'CLOSE_NUTRIENT_DETAILS' });
     }
+  }
+
+  // Keeps the "You'll log" total and the quick choices in step with the servings box, without re-rendering
+  // (a render would drop edits the person has made to other fields).
+  function updateServingsTotal(form) {
+    if (!form || state.draft?.kind !== 'confirmation') return;
+    const servings = form.elements?.namedItem?.('servings')?.value;
+    const total = form.querySelector?.('[data-servings-total]');
+    if (total) total.textContent = servingsTotalText(state.draft.item.perServing, servings);
+    for (const choice of form.querySelectorAll?.('[data-action="set-servings"]') ?? []) {
+      choice.setAttribute('aria-pressed', String(Number(choice.dataset.servings) === Number(servings)));
+    }
+  }
+
+  function handleInput(event) {
+    if (event.target?.name === 'servings') updateServingsTotal(event.target.closest?.('form[data-action="confirm-item"]'));
   }
 
   function handleChange(event) {
@@ -1460,6 +1481,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       root.addEventListener('click', guarded(handleClick));
       root.addEventListener('submit', guarded(handleSubmit));
       root.addEventListener('change', guarded(handleChange));
+      root.addEventListener('input', guarded(handleInput));
       listenersBound = true;
       pwa = pwaFactory({
         onStatus: status => { state.installStatus = status; refreshPwaRegions(); },
