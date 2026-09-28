@@ -1,6 +1,7 @@
 import { requestAnalysis, requestMatchChoice, AnalysisError } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
 import { MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
+import { parseNutritionLabel } from './nutrition-label.js';
 
 const MICROS = new Set(NUTRIENTS.filter(item => item.group === 'micros').map(item => item.key));
 const CANONICAL = new Set([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => item.key));
@@ -190,7 +191,31 @@ function applyStatedNutrients(draft, stated) {
     assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
 }
 
-export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch }) {
+// A label read from text (typed, pasted, or recognized on the device) becomes a draft directly: no AI,
+// no USDA, no network.
+function labelTextDraft(label, text) {
+  const before = String(text ?? '').split(/nutrition\s+facts|supplement\s+facts/i)[0].split('\n').map(line => line.trim()).filter(Boolean)[0];
+  const name = before && !/calories|serving/i.test(before) ? before.slice(0, 80) : label.kind === 'supplement' ? 'Supplement (from label)' : 'Packaged food (from label)';
+  const servingLabel = label.servingLabel ?? '1 serving';
+  const perServing = nested(label.nutrients);
+  const provenance = Object.fromEntries(Object.keys(label.nutrients).map(key => [key, { source: 'label', confidence: 'high' }]));
+  return { kind: 'labelPhoto', method: 'label-text', fromLabel: true, labelKind: label.kind, name, servingLabel, confidence: 'high',
+    totalServings: 1, assumptions: ['Read from the nutrition label on this device; no AI or online lookup was used.'],
+    components: [{ name, householdAmount: servingLabel, estimatedGrams: label.servingGrams ?? 0, usdaSearch: name, confidence: 'high',
+      candidates: [], selectedFdcId: null, matchResolved: true }],
+    labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };
+}
+
+export async function analyzeInput({ kind, text = '', image, clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText }) {
+  const typedLabel = parseNutritionLabel(text);
+  if (typedLabel) return { status: 'estimate', draft: labelTextDraft(typedLabel, text) };
+  if (image && recognizeText && !clarificationHistory.length) {
+    let recognized = '';
+    try { recognized = await recognizeText(image, { signal }); } catch { recognized = ''; }
+    if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
+    const photoLabel = parseNutritionLabel(recognized);
+    if (photoLabel) return { status: 'estimate', draft: labelTextDraft(photoLabel, text) };
+  }
   const parsed = await requestAnalysis({ kind, text, image, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);

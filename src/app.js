@@ -19,6 +19,7 @@ import {
 import { createStore, StorageWriteError } from './storage.js';
 import { renderApp, renderInstallStatus, renderUpdateBanner } from './views.js';
 import { analyzeInput } from './analysis.js';
+import { createTextRecognizer } from './ocr.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
@@ -132,7 +133,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
   cryptoRef = globalThis.crypto, confirmFn = message => globalThis.confirm?.(message) ?? false,
-  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, activityUrl = './activity.json', downloadFn = (name, contents) => {
+  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, recognizeText = createTextRecognizer({ documentRef }), activityUrl = './activity.json', downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
     link.href = url;
@@ -190,11 +191,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   // compared later with what was actually logged. Photos are never stored, only whether one was used.
   function analysisRecord(result, input) {
     const settings = store.get('settings');
-    const provider = analysisProvider(settings);
+    const provider = result.method === 'label-text' ? 'on-device' : analysisProvider(settings);
     return {
       analyzedAt: clock().toISOString(),
       provider,
-      model: provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
+      ...(result.method ? { method: result.method } : {}),
+      model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
       input: { text: input.text, hadPhoto: Boolean(input.hadPhoto) },
       clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
       estimate: {
@@ -217,7 +219,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   function openAnalysisReview(result, input = {}) {
     const item = {
       id: null,
-      type: result.kind === 'recipe' || result.totalServings > 1 ? 'recipe' : result.labelBasis ? 'packaged' : 'meal',
+      type: result.kind === 'recipe' || result.totalServings > 1 ? 'recipe' : result.labelKind === 'supplement' ? 'supplement' : result.labelBasis || result.fromLabel ? 'packaged' : 'meal',
       name: result.name,
       servingLabel: result.servingLabel,
       perServing: result.perServing,
@@ -235,7 +237,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       labelBasis: result.labelBasis,
       usdaProblems: result.components.filter(component => component.lookupError).map(component => ({ name: component.name, error: component.lookupError })),
       components: result.components.map(component => ({ name: component.name, grams: component.estimatedGrams,
-        source: component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
+        source: result.fromLabel ? 'Nutrition label' : component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
     } };
     state.analysis = null;
     render();
@@ -272,7 +274,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
     try {
       const result = await analyzeInput({ ...input, image: analysisImage, settings: store.get('settings'),
-        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch });
+        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText });
       if (generation !== analysisGeneration) return;
       if (result.status === 'needs_clarification') {
         state.analysis = { status: 'needs_clarification', ...input, questions: result.questions };
