@@ -82,11 +82,18 @@ export function resolveEffectiveTargets(targets) {
 }
 
 export function computeDayTargets(targets, trainingDay) {
-  const effective = targets?.computed ? resolveEffectiveTargets(targets) : targets;
+  const effective = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(targets?.computed ? resolveEffectiveTargets(targets) : targets) };
+  const calories = trainingDay ? effective.trainingDayCalories : effective.restDayCalories;
+  // Carbohydrate and fat ranges follow the day's calorie target (4 and 9 kcal per gram).
+  const grams = (percent, perGram) => Math.round(calories * percent / 100 / perGram);
   return {
     ...effective,
-    calories: trainingDay ? effective.trainingDayCalories : effective.restDayCalories,
-    waterMl: trainingDay ? effective.trainingDayWaterMl : effective.waterMl
+    calories,
+    waterMl: trainingDay ? effective.trainingDayWaterMl : effective.waterMl,
+    carbsMinG: grams(effective.carbsPercentMin, 4),
+    carbsMaxG: grams(effective.carbsPercentMax, 4),
+    fatMinG: grams(effective.fatPercentMin, 9),
+    fatMaxG: grams(effective.fatPercentMax, 9)
   };
 }
 
@@ -246,6 +253,8 @@ function effectiveDefinition(definition, targets, calorieTarget) {
   const fiberMin = targets?.fiberMinG ?? targets?.fiberG;
   if (definition.id === 'fiber' && Number.isFinite(fiberMin)) next.targetMin = fiberMin;
   if (definition.id === 'fiber' && Number.isFinite(targets?.fiberPreferredG)) next.targetPreferred = Math.max(next.targetMin, targets.fiberPreferredG);
+  if (definition.id === 'solubleFiber' && Number.isFinite(targets?.solubleFiberMinG)) next.targetMin = targets.solubleFiberMinG;
+  if (definition.id === 'solubleFiber' && Number.isFinite(targets?.solubleFiberPreferredG)) next.targetPreferred = Math.max(next.targetMin, targets.solubleFiberPreferredG);
   if (definition.id === 'freeSugar' && Number.isFinite(targets?.freeSugarMaxG)) next.targetMax = targets.freeSugarMaxG;
   if (definition.id === 'transFat' && Number.isFinite(targets?.transFatMaxG)) next.targetMax = targets.transFatMaxG;
   if (definition.id === 'sodium' && Number.isFinite(targets?.sodiumHardMaxMg)) next.targetMax = targets.sodiumHardMaxMg;

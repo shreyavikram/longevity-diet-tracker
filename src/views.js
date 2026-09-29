@@ -13,7 +13,6 @@ import { groupMealEntries, MEAL_TYPES, suggestMealIdentity } from './meals.js';
 import {
   cmToIn,
   dailySummary,
-  macroStatus,
   isSupplementScheduled,
   kgToLb,
   mlToFlOz,
@@ -23,6 +22,7 @@ import {
   weeklyCoverage
 } from './calculations.js';
 import { progressSummary, rollingWeightSeries } from './trends.js';
+import { todayMetrics } from './today-metrics.js';
 import { analysisProvider } from './services/anthropic.js';
 
 const DISCLAIMER = 'This app estimates nutrition and is not medical or dietetic advice. Targets are general references you can edit. Consult a qualified professional for personal medical or nutrition guidance.';
@@ -223,41 +223,12 @@ function renderEntryList(entries, data, selectedDate) {
 const GL_STATES = Object.freeze({
   low: '✓ Low', moderate: '◐ Moderate', possiblyHigh: '↑? Possibly high', high: '↑ High', partial: '? Partly known', unknown: '? Unknown'
 });
-const CARDIO_STATES = Object.freeze({
-  met: '✓ Within target', preferred: '✓ Preferred amount', inProgress: '◐ In progress', high: '↑ Above target',
-  aboveIdeal: '↑ Above ideal', aboveMaximum: '⚠ Above limit', declared: '✓ None declared', attention: '! Check ingredients', unknown: '? Unknown'
-});
 const one = value => format(value, 1);
 
 function mealGlDisplay(metrics) {
   if (metrics.glCompleteness === 'unknown') return 'Estimated GL unknown';
   if (metrics.glCompleteness === 'partial') return `At least ${one(metrics.gl)} GL (estimated)`;
   return `Estimated GL ${one(metrics.gl)}${metrics.glRange && metrics.glRange.min !== metrics.glRange.max ? ` (${one(metrics.glRange.min)} to ${one(metrics.glRange.max)})` : ''}`;
-}
-
-function renderMealGroups(meals, data, selectedDate) {
-  if (!meals.length) return '<p class="muted">No meals logged for this date yet.</p>';
-  const logged = new Map((data.log?.[selectedDate] ?? []).map(entry => [entry.id, entry]));
-  return meals.map(group => {
-    const time = /T(\d{2}:\d{2})/.exec(String(group.consumedAt ?? ''))?.[1];
-    const title = group.mealId ? `${mealTypeLabel(group.mealType)}${time ? ` · ${time}` : ''}` : 'Unassigned';
-    const metrics = group.metrics;
-    const summary = metrics ? `<button class="meal-summary" type="button" data-action="open-meal-details" data-meal-id="${escapeHtml(group.mealId)}">
-        <span><strong>${escapeHtml(mealGlDisplay(metrics))}</strong> <em class="flag">${escapeHtml(GL_STATES[metrics.glState])}</em></span>
-        <span>Fiber ratio ${escapeHtml(metrics.fiberCarbLabel)}${metrics.refinedHeavy ? ' · <em class="flag">! Refined-heavy</em>' : ''} · Protein ${escapeHtml(formatNutrient(metrics.proteinG, 'g'))}${metrics.unknownProteinItems.length ? ' known' : ''}</span>
-        <small>${escapeHtml(formatNutrient(metrics.carbsG, 'g'))} carbohydrate · ${escapeHtml(formatNutrient(metrics.availableCarbsG, 'g'))} available${metrics.missingGiItems.length ? ` · GI unavailable for ${escapeHtml(metrics.missingGiItems.join(', '))}` : ''}</small>
-      </button>` : '<p class="muted">Assign these foods to see meal calculations. Edit a food to choose its meal.</p>';
-    return `<article class="meal-card gl-${escapeHtml(metrics?.glState ?? 'none')}"><h3>${escapeHtml(title)}</h3>${summary}${renderEntryList(group.entries.map(entry => logged.get(entry.id) ?? entry), data, selectedDate)}</article>`;
-  }).join('');
-}
-
-function renderCardiometabolicCard(summary) {
-  if (!summary) return '';
-  const items = [summary.freeSugar, summary.fiber, summary.saturatedFat, summary.transFat, summary.sodium];
-  return `<section class="card stack cardiometabolic-card" aria-labelledby="heart-glucose-title"><h2 id="heart-glucose-title">Heart and glucose</h2>
-    <div class="metric-grid">${items.map(item => `<button class="cardio-item cardio-${escapeHtml(item.state)}" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="cardiometabolic">
-      <span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.display)}</strong><small>${escapeHtml(item.targetDisplay)}</small><em class="flag">${escapeHtml(CARDIO_STATES[item.state] ?? item.state)}</em></button>`).join('')}</div>
-    <p class="muted">Planning references, not a diagnosis. Values marked "at least" are missing data from some foods.</p></section>`;
 }
 
 function renderMealDetails(meal) {
@@ -350,70 +321,115 @@ function coverageSummary(items) {
   return parts.map(([value, label]) => `${value} ${label}`).join(' · ') || 'No tracked nutrients';
 }
 
+function metricAmount(value, unit, units) {
+  if (!Number.isFinite(value)) return 'Unknown';
+  if (unit === 'ml') return formatWater(value, units);
+  if (unit === 'GL') return `${format(value)} GL`;
+  return formatNutrient(value, unit);
+}
+
+function metricTarget(metric, units) {
+  const amount = value => metricAmount(value, metric.unit, units);
+  const { min, max, ideal, preferred } = metric.target;
+  if (Number.isFinite(metric.target.goal)) return `Target ${amount(metric.target.goal)}`;
+  if (metric.kind === 'range') return `Target ${amount(min)} to ${amount(max)}`;
+  if (metric.kind === 'minimum') return `Target ${amount(min)}${Number.isFinite(preferred) ? `, ${amount(preferred)} preferred` : ''}`;
+  if (metric.id === 'transFat') return 'Target: none';
+  return Number.isFinite(ideal) ? `${amount(ideal)} ideal · ${amount(max)} limit` : `${amount(max)} limit`;
+}
+
+function renderMetricBar(metric, { expanded = false, units = 'metric' } = {}) {
+  const id = escapeHtml(metric.id);
+  const bar = metric.bar ?? {};
+  const pct = value => `${format(Math.max(0, Math.min(100, value)), 1)}%`;
+  const left = Number.isFinite(metric.target.goal) && Number.isFinite(metric.value) && !metric.atLeast ? metric.target.goal - metric.value : null;
+  const valueText = `${metric.atLeast && Number.isFinite(metric.value) ? 'At least ' : ''}${metricAmount(metric.value, metric.unit, units)}${Number.isFinite(left) ? ` · ${format(Math.abs(left))} ${left >= 0 ? 'left' : 'over'}` : ''}`;
+  const contributors = metric.contributors.slice(0, 6);
+  const detail = expanded ? `<div id="metric-${id}" class="metric-detail">
+      <p>${escapeHtml(metric.meaning)}</p>
+      <p class="muted">${escapeHtml(metric.targetNote)}</p>
+      ${contributors.length ? `<h3>Where it came from</h3><ul class="contributor-list">${contributors.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong>${item.estimate ? ' <small class="estimate-tag">estimate</small>' : ''}</span><span>${escapeHtml(metricAmount(item.amount, metric.unit, units))}${metric.contributors.length > 1 ? ` · ${escapeHtml(format(item.share * 100))}%` : ''}</span>${item.parts.length ? `<ul class="part-list">${item.parts.slice(0, 5).map(part => `<li><span>${escapeHtml(part.name)}</span><span>${escapeHtml(metricAmount(part.amount, metric.unit, units))}</span></li>`).join('')}</ul>` : ''}</li>`).join('')}</ul>` : ''}
+      ${metric.unknownCount ? `<p class="muted">${escapeHtml(plural(metric.unknownCount, 'food'))} ${metric.unknownCount === 1 ? 'does' : 'do'} not report this, so the total may be higher.</p>` : ''}
+    </div>` : '';
+  return `<article class="metric-bar level-${escapeHtml(metric.level)}">
+    <button class="metric-bar-button" type="button" data-action="toggle-metric" data-metric-id="${id}" aria-expanded="${expanded}" aria-controls="metric-${id}">
+      <span class="metric-bar-head"><strong>${escapeHtml(metric.label)}</strong><span>${escapeHtml(valueText)}</span></span>
+      <span class="bar-track" aria-hidden="true">${Number.isFinite(bar.zoneStart) ? `<span class="bar-zone" style="left:${pct(bar.zoneStart)};width:${pct(bar.zoneEnd - bar.zoneStart)}"></span>` : ''}<span class="bar-fill" style="width:${pct(bar.fill ?? 0)}"></span>${Number.isFinite(bar.idealTick) ? `<span class="bar-tick bar-ideal" style="left:${pct(bar.idealTick)}"></span>` : ''}${Number.isFinite(bar.tick) ? `<span class="bar-tick" style="left:${pct(bar.tick)}"></span>` : ''}</span>
+      <span class="metric-bar-foot"><em class="flag">${escapeHtml(`${metric.symbol} ${metric.statusLabel}`)}</em><small>${escapeHtml(metricTarget(metric, units))}</small></span>
+    </button>${detail}
+  </article>`;
+}
+
+function renderMealGroups(meals, data, selectedDate, openMeals = []) {
+  if (!meals.length) return '<p class="muted">No meals logged for this date yet.</p>';
+  const logged = new Map((data.log?.[selectedDate] ?? []).map(entry => [entry.id, entry]));
+  return meals.map(group => {
+    const key = group.mealId ?? 'unassigned';
+    const open = openMeals.includes(key);
+    const time = /T(\d{2}:\d{2})/.exec(String(group.consumedAt ?? ''))?.[1];
+    const title = group.mealId ? `${mealTypeLabel(group.mealType)}${time ? ` · ${time}` : ''}` : 'Unassigned';
+    const calories = group.entries.reduce((sum, entry) => sum + (Number.isFinite(entry.nutrients?.calories) ? entry.nutrients.calories : 0), 0);
+    const metrics = group.metrics;
+    const glTag = metrics && metrics.glCompleteness !== 'unknown' ? ` · <em class="flag">${escapeHtml(GL_STATES[metrics.glState])} GL</em>` : '';
+    return `<article class="meal-card gl-${escapeHtml(metrics?.glState ?? 'none')}">
+      <button class="meal-toggle" type="button" data-action="toggle-meal" data-meal-key="${escapeHtml(key)}" aria-expanded="${open}">
+        <span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(group.entries.map(entry => entry.name).join(', '))}</small><small>${escapeHtml(format(calories))} kcal${glTag}</small></span><span aria-hidden="true">${open ? '▴' : '▾'}</span></button>
+      ${open ? `${renderEntryList(group.entries.map(entry => logged.get(entry.id) ?? entry), data, selectedDate)}${metrics ? `<button class="quiet-button" type="button" data-action="open-meal-details" data-meal-id="${escapeHtml(group.mealId)}">Meal details${metrics.glCompleteness === 'unknown' ? '' : `: ${escapeHtml(mealGlDisplay(metrics))}`}</button>` : '<p class="muted">Edit a food to choose its meal and see meal calculations.</p>'}` : ''}
+    </article>`;
+  }).join('');
+}
+
 function renderToday(data, state, ui = {}) {
   const selectedDate = state.selectedDate;
   const daily = dailySummary(selectedDate, data);
-  const weekly = weeklyCoverage(selectedDate, data);
+  const units = data.settings.units;
   const trainingDay = daily.trainingDay;
   const workouts = Array.isArray(data.dayState[selectedDate]?.workouts) ? data.dayState[selectedDate].workouts : [];
   const trainingControl = data.settings.trainingDayToggleEnabled
     ? `<button class="quiet-button" type="button" data-action="toggle-training" aria-pressed="${trainingDay}">${trainingDay ? 'Training day' : 'Rest day'}</button>`
     : '';
-  const trackedCoverage = data.settings.trackedNutrients
-    .map(id => weekly.nutrients[id])
-    .filter(Boolean);
-  const needsAttention = weekly.needsAttention
-    .filter(item => data.settings.trackedNutrients.includes(item.id));
-  const dueSupplements = data.library.filter(item => isSupplementScheduled(item, selectedDate));
-  const completed = new Set(data.dayState[selectedDate]?.supplementsCompleted ?? []);
-  const incompleteSupplements = dueSupplements.filter(item => !completed.has(item.id));
-  const protein = daily.details.protein;
-  const fiber = daily.details.fiber;
-  const calories = daily.calories.knownTotal;
-  const targetCalories = daily.targets?.calories ?? 0;
-  const remaining = daily.remainingCalories;
-  const dayProgress = ui.dayProgress ?? 1;
-  const statusOf = (value, target, kind = 'minimum') => macroStatus({ value, target, kind, dayProgress });
-  const statusClass = status => status ? ` class="macro-status status-${status.level}"` : '';
-  const statusFlag = status => status ? `<em class="flag">${escapeHtml(`${status.symbol} ${status.label}`)}</em>` : '';
-  const proteinStatus = statusOf(protein.total, protein.target);
-  const calorieStatus = daily.calories.complete ? statusOf(calories, targetCalories, 'calories') : null;
-  const waterStatus = statusOf(daily.waterMl, daily.targets?.waterMl);
-  const macros = [
-    ['Fiber', fiber.total, 'g', fiber.target],
-    ['Carbohydrate', daily.nutrients.carbsG, 'g', null],
-    ['Fat', daily.nutrients.fatG, 'g', null]
-  ];
-  const dialogItem = state.dialog?.kind === 'nutrientDetails'
-    ? weekly.nutrients[state.dialog.nutrientId]
-    : null;
-  const dailyCalorieCopy = daily.calories.complete
-    ? `<span>Calories remaining</span><strong>${escapeHtml(format(Math.abs(remaining)))} kcal</strong><small>${remaining >= 0 ? `${escapeHtml(format(calories))} of ${escapeHtml(format(targetCalories))} kcal target` : `${escapeHtml(format(Math.abs(remaining)))} kcal above the day reference`}</small>`
-    : `<span>Calories</span><strong>At least ${escapeHtml(format(calories))} kcal known</strong><small>Remaining calories unknown. Calories are unknown for: ${daily.calories.unknownItems.map(item => escapeHtml(item.name)).join(', ')}.</small>`;
-  const weeklyCalorieCopy = weekly.calories.complete
-    ? `<strong>${escapeHtml(format(Math.max(0, weekly.calories.remaining)))} kcal</strong> remain in the ${escapeHtml(format(weekly.calories.target))} kcal seven-day budget${weekly.calories.remaining < 0 ? `; ${escapeHtml(format(Math.abs(weekly.calories.remaining)))} kcal is above the reference` : ''}.`
-    : `<strong>Seven-day budget remaining is unknown.</strong> At least ${escapeHtml(format(weekly.calories.total))} kcal is known. Calories are unknown for: ${weekly.calories.unknownItems.map(item => escapeHtml(item.name)).join(', ')}.`;
+  const { pinned, problems, onTrack, water } = todayMetrics(daily, { dayProgress: ui.dayProgress ?? 1 });
+  const bar = metric => renderMetricBar(metric, { expanded: state.expandedMetric === metric.id, units });
+  const scheduled = data.library.some(item => isSupplementScheduled(item, selectedDate))
+    || (data.dayState[selectedDate]?.supplementsCompleted ?? []).length > 0;
+  const onTrackCount = onTrack.filter(metric => metric.level === 'good').length;
+  const unknownCount = onTrack.length - onTrackCount;
   return `<section class="page today-page stack" aria-labelledby="today-title">
     <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div>${trainingControl}</div>
     ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${Number.isFinite(workout.minutes) ? ` · ${escapeHtml(workout.minutes)} min` : ''}`).join('; ')}</p>` : ''}
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
-    <section class="card" aria-labelledby="protein-calories-heading"><h2 id="protein-calories-heading">Protein and calories</h2><div class="primary-metrics"><article${statusClass(proteinStatus)}><span>Protein</span><strong>${escapeHtml(formatNutrient(protein.total, 'g'))}</strong><small>of ${escapeHtml(formatNutrient(protein.target, 'g'))}</small>${statusFlag(proteinStatus)}</article><article${statusClass(calorieStatus)}>${dailyCalorieCopy}${statusFlag(calorieStatus)}</article></div><p class="weekly-budget">${weeklyCalorieCopy} The effective weekly average is ${escapeHtml(format(daily.targets?.averageCalories ?? 0))} kcal.</p></section>
-    <section class="card stack" aria-labelledby="secondary-metrics-heading"><h2 id="secondary-metrics-heading">Fiber, water, and macros</h2><div class="metric-grid">${macros.map(([label, value, unit, target]) => { const status = Number.isFinite(target) ? statusOf(value, target) : null; return `<article${statusClass(status)}><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatNutrient(value, unit))}</strong>${Number.isFinite(target) ? `<small>of ${escapeHtml(formatNutrient(target, unit))}</small>` : '<small>from known values</small>'}${statusFlag(status)}</article>`; }).join('')}<article${statusClass(waterStatus)}><span>Water</span><strong>${escapeHtml(formatWater(daily.waterMl, data.settings.units))} logged</strong><small>of ${escapeHtml(formatWater(daily.targets?.waterMl ?? 0, data.settings.units))}</small>${statusFlag(waterStatus)}</article></div><div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, data.settings.units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, data.settings.units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>
-    ${renderCardiometabolicCard(daily.cardiometabolic)}
-    <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Logged meals</h2>${renderMealGroups(daily.meals, data, selectedDate)}</section>
-    <button class="primary-button full-width add-action" type="button" data-action="navigate" data-route="add">Add food or supplement</button>
-    <section class="card stack" aria-labelledby="today-supplements"><h2 id="today-supplements">Scheduled supplements</h2>${renderSupplementSchedule(data, selectedDate)}</section>
-    <section class="card attention-card" aria-labelledby="attention-heading"><h2 id="attention-heading">Needs attention</h2>${incompleteSupplements.length || needsAttention.length ? `<ol class="attention-list">${incompleteSupplements.map(item => `<li><strong>Scheduled today:</strong> ${escapeHtml(item.name)} has not been marked complete.</li>`).join('')}${needsAttention.map(item => `<li><button class="text-button" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="attention"><strong>${escapeHtml(item.label)}</strong>: ${escapeHtml(COVERAGE_LABELS[item.state])}</button></li>`).join('')}</ol>` : '<p class="muted">No tracked nutrient or scheduled supplement needs attention in this view.</p>'}</section>
-    <section class="hero-card coverage-card" aria-labelledby="coverage-heading">
+    <section class="card stack" aria-labelledby="goals-heading"><h2 id="goals-heading" class="sr-only">Calories and protein</h2>
+      <p class="muted">The line marks your target. Tap a bar to see what it means and which foods it came from.</p>
+      <div class="metric-list">${pinned.map(bar).join('')}</div></section>
+    <section class="card stack" aria-labelledby="problems-heading"><h2 id="problems-heading">${problems.length ? 'Needs a look' : 'Nothing else is off target'}</h2>
+      ${problems.length ? `<div class="metric-list">${problems.map(bar).join('')}</div>` : ''}
+      <button class="on-track-toggle" type="button" data-action="toggle-on-track" aria-expanded="${state.onTrackOpen ? 'true' : 'false'}" aria-controls="on-track-list"><span>✓ ${escapeHtml(format(onTrackCount))} on track${unknownCount ? ` · ? ${escapeHtml(format(unknownCount))} unknown` : ''}</span><strong>${state.onTrackOpen ? 'Hide' : 'Show'}</strong></button>
+      ${state.onTrackOpen ? `<div id="on-track-list" class="metric-list">${onTrack.map(bar).join('')}</div>` : ''}
+    </section>
+    ${water ? `<section class="card stack" aria-labelledby="water-heading"><h2 id="water-heading" class="sr-only">Water</h2>${bar(water)}<div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>` : ''}
+    <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Meals</h2>${renderMealGroups(daily.meals, data, selectedDate, state.openMeals ?? [])}
+      <button class="primary-button full-width add-action" type="button" data-action="navigate" data-route="add">Add food or supplement</button></section>
+    ${scheduled ? `<section class="card stack" aria-labelledby="today-supplements"><h2 id="today-supplements">Supplements</h2>${renderSupplementSchedule(data, selectedDate)}</section>` : ''}
+    ${state.dialog?.kind === 'mealDetails' ? renderMealDetails(daily.meals.find(meal => meal.mealId === state.dialog.mealId)) : ''}
+  </section>`;
+}
+
+function renderCoverage(data, state, date) {
+  const weekly = weeklyCoverage(date, data);
+  const trackedCoverage = data.settings.trackedNutrients.map(id => weekly.nutrients[id]).filter(Boolean);
+  const dialogItem = state.dialog?.kind === 'nutrientDetails' ? weekly.nutrients[state.dialog.nutrientId] : null;
+  const calorieCopy = weekly.calories.complete
+    ? `<strong>${escapeHtml(format(Math.max(0, weekly.calories.remaining)))} kcal</strong> remain in the ${escapeHtml(format(weekly.calories.target))} kcal seven-day budget${weekly.calories.remaining < 0 ? `; ${escapeHtml(format(Math.abs(weekly.calories.remaining)))} kcal is above the reference` : ''}.`
+    : `<strong>Seven-day budget remaining is unknown.</strong> At least ${escapeHtml(format(weekly.calories.total))} kcal is known.`;
+  return `<section class="hero-card coverage-card" aria-labelledby="coverage-heading">
       <span class="eyebrow">${escapeHtml(dateLabel(weekly.startDate))} to ${escapeHtml(dateLabel(weekly.endDate))}</span>
       <h2 id="coverage-heading">Seven-day nutrient coverage</h2>
+      <p class="weekly-budget">${calorieCopy}</p>
       <button class="coverage-toggle" type="button" data-action="toggle-coverage" aria-expanded="${state.coverageOpen ? 'true' : 'false'}" aria-controls="coverage-details"><span>${escapeHtml(coverageSummary(trackedCoverage))}</span><strong>${state.coverageOpen ? 'Hide details' : 'Show details'}</strong></button>
       ${state.coverageOpen ? `<div id="coverage-details"><p>Known amounts stay separate from gaps in food and supplement data.</p>
 <div class="coverage-grid">${trackedCoverage.map(item => `<button class="coverage-item state-${escapeHtml(item.state)}" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="coverage"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(COVERAGE_LABELS[item.state])}</strong><small>${escapeHtml(formatNutrient(item.total, item.unit))}</small></button>`).join('')}</div></div>` : ''}
     </section>
-    ${renderNutrientDetails(dialogItem)}
-    ${state.dialog?.kind === 'mealDetails' ? renderMealDetails(daily.meals.find(meal => meal.mealId === state.dialog.mealId)) : ''}
-  </section>`;
+    ${renderNutrientDetails(dialogItem)}`;
 }
 
 function renderLibrary({ data, state }) {
@@ -830,6 +846,7 @@ export function renderProgress({ data, state, ui = {} }) {
     <section class="card stack" aria-labelledby="weight-heading"><div><h2 id="weight-heading">Weight trend</h2><p class="muted">Individual readings and the trailing 7-day mean. There is no fixed goal line.</p></div>${renderTrendChart(series, units, 'weight')}</section>
     ${waistSeries.length ? `<section class="card stack" aria-labelledby="waist-heading"><h2 id="waist-heading">Waist trend</h2>${renderTrendChart(waistSeries, units, 'waist')}</section>` : ''}
     <section class="card stack" aria-labelledby="readings-heading"><h2 id="readings-heading">Readings</h2>${entries.length ? `<ul class="plain-list reading-list">${entries.slice().reverse().map(entry => `<li><span><strong>${escapeHtml(entry.date)}</strong><small>${format(chartValue(entry.weightKg, units, 'weight'), 1)} ${imperial ? 'lb' : 'kg'}${Number.isFinite(entry.waistCm) ? ` · waist ${format(chartValue(entry.waistCm, units, 'waist'), 1)} ${imperial ? 'in' : 'cm'}` : ''}</small></span><span class="reading-actions"><button class="quiet-button" type="button" data-action="edit-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Edit reading for ${escapeHtml(entry.date)}">Edit</button><button class="quiet-button" type="button" data-action="delete-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Delete reading for ${escapeHtml(entry.date)}">Delete</button></span></li>`).join('')}</ul>` : '<p class="muted">No readings yet.</p>'}</section>
+    ${renderCoverage(data, state, state.progressDate ?? state.selectedDate)}
     ${summaries.map(summary => renderPeriodSummary(summary, data.settings.trackedNutrients)).join('')}
     <section class="card stack" aria-labelledby="recommendations-heading"><div><h2 id="recommendations-heading">Target recommendations</h2><p class="muted">Suggestions require consistent readings across two 14-day windows. Your targets change only when you accept.</p></div>
       <button class="secondary-button" type="button" data-action="refresh-progress">Check current trend</button>
@@ -851,14 +868,23 @@ const HEART_TARGET_INPUTS = [
   ['transFatMaxG', 'Trans fat (g)', 0, 0, 1],
   ['sodiumIdealMaxMg', 'Ideal sodium limit (mg)', 0, 10000, 50],
   ['sodiumHardMaxMg', 'Sodium maximum (mg)', 0, 10000, 50],
-  ['fiberCarbRatioDenominatorMax', 'Refined-heavy below 1 g fiber per (g carbohydrate)', 1, 50, 1]
+  ['fiberCarbRatioDenominatorMax', 'Refined-heavy below 1 g fiber per (g carbohydrate)', 1, 50, 1],
+  ['carbsPercentMin', 'Carbs: lowest % of calories', 0, 100, 1],
+  ['carbsPercentMax', 'Carbs: highest % of calories', 0, 100, 1],
+  ['fatPercentMin', 'Fat: lowest % of calories', 0, 100, 1],
+  ['fatPercentMax', 'Fat: highest % of calories', 0, 100, 1],
+  ['mealCarbsMaxG', 'Carbs per meal, most (g)', 10, 200, 1],
+  ['mealGlMax', 'Estimated GL per meal, most', 1, 100, 1],
+  ['dailyGlMax', 'Estimated GL per day, most', 10, 400, 5],
+  ['solubleFiberMinG', 'Soluble fiber minimum (g)', 0, 50, 1],
+  ['solubleFiberPreferredG', 'Preferred soluble fiber (g)', 0, 50, 1]
 ];
 
 function renderHeartTargets(targets, ui) {
   const reference = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(targets.computed ?? {}) };
   const overrides = targets.overrides ?? {};
   return `<form class="card stack" data-action="save-heart-targets">
-    <div><h2>Heart and glucose targets</h2><p class="muted">Editable planning references, not medical advice. 1,500 mg is the ideal sodium limit and 2,300 mg the maximum. During the day saturated fat shows a gram budget from your calorie target; the final percentage uses the calories you actually logged.</p></div>
+    <div><h2>Heart and glucose targets</h2><p class="muted">Editable planning references, not medical advice. 1,500 mg is the ideal sodium limit and 2,300 mg the maximum. During the day saturated fat shows a gram budget from your calorie target; the final percentage uses the calories you actually logged. Carb and fat ranges are shares of each day's calorie target, set for prediabetes: moderate carbs spread across meals, and fat mostly from nuts, seeds, avocado, and olive oil.</p></div>
     <div class="field-grid">${HEART_TARGET_INPUTS.map(([key, label, min, max, step]) => `<label>${escapeHtml(label)}<input name="${key}" type="number" min="${min}" max="${max}" step="${step}" inputmode="decimal" value="${escapeHtml(overrides[key] ?? '')}" placeholder="${escapeHtml(format(reference[key], 1))}"${min === max ? ' readonly' : ''}>${Number.isFinite(overrides[key]) ? `<button class="text-button" type="button" data-action="reset-target-field" data-field="${key}">Use default (${escapeHtml(format(CARDIOMETABOLIC_TARGET_DEFAULTS[key], 1))})</button>` : ''}</label>`).join('')}</div>
     <div class="button-row"><button class="quiet-button" type="button" data-action="set-saturated-fat-preset" data-value="6">Heart-focused 6%</button><button class="quiet-button" type="button" data-action="set-saturated-fat-preset" data-value="10">General 10%</button></div>
     ${formNotice(ui, 'save-heart-targets')}<button class="secondary-button" type="submit">Save heart and glucose targets</button>

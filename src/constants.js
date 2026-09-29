@@ -52,7 +52,16 @@ export const CARDIOMETABOLIC_TARGET_DEFAULTS = Object.freeze({
   transFatMaxG: 0,
   sodiumIdealMaxMg: 1500,
   sodiumHardMaxMg: 2300,
-  fiberCarbRatioDenominatorMax: 10
+  fiberCarbRatioDenominatorMax: 10,
+  carbsPercentMin: 33,
+  carbsPercentMax: 42,
+  fatPercentMin: 25,
+  fatPercentMax: 35,
+  mealCarbsMaxG: 50,
+  mealGlMax: 20,
+  dailyGlMax: 100,
+  solubleFiberMinG: 7,
+  solubleFiberPreferredG: 10
 });
 
 export const NUTRIENT_SOURCES = Object.freeze([
@@ -78,6 +87,7 @@ export const WEEKDAYS = Object.freeze([
 export const NUTRIENTS = Object.freeze([
   { id: 'protein', label: 'Protein', key: 'proteinG', unit: 'g', targetMin: 130, kind: 'minimum', evidence: 'Training target', veganPriority: true },
   { id: 'fiber', label: 'Fiber', key: 'fiberG', unit: 'g', targetMin: 25, targetPreferred: 35, kind: 'minimum', evidence: 'Editable goal' },
+  { id: 'solubleFiber', label: 'Soluble fiber', key: 'solubleFiberG', unit: 'g', targetMin: 7, targetPreferred: 10, kind: 'minimum', evidence: 'Portfolio diet LDL evidence' },
   { id: 'b12', label: 'Vitamin B12', key: 'b12Mcg', group: 'micros', unit: 'mcg', targetMin: 2.4, kind: 'minimum', evidence: 'RDA', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/' },
   { id: 'vitD', label: 'Vitamin D', key: 'vitDIu', group: 'micros', unit: 'IU', targetMin: 600, targetPreferred: 1000, upperLimit: 4000, kind: 'minimum', evidence: 'RDA and configurable range', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/VitaminD-HealthProfessional/' },
   { id: 'ala', label: 'ALA omega-3', key: 'alaG', group: 'micros', unit: 'g', targetMin: 1.1, kind: 'minimum', evidence: 'AI', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/Omega3FattyAcids-HealthProfessional/' },

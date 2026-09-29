@@ -442,3 +442,46 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .cardio-item:focus-visible, .meal-summary:focus-visible { outline: 3px solid var(--forest); outline-offset: 2px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .glycemic-review .detail-list li { flex-wrap: wrap; overflow-wrap: anywhere; }
+
+/* Today target bars: the line is the target, the shaded zone a target range; the status word and symbol
+   carry the meaning as well as the color. */
+.metric-list { display: grid; gap: 10px; }
+.metric-bar { border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.metric-bar-button { display: grid; width: 100%; min-height: 44px; gap: 8px; border: 0; border-radius: 16px; background: transparent; color: var(--ink); padding: 12px 14px; text-align: left; cursor: pointer; font: inherit; }
+.metric-bar-button:focus-visible, .meal-toggle:focus-visible, .on-track-toggle:focus-visible { outline: 3px solid var(--forest); outline-offset: 2px; }
+.metric-bar-head, .metric-bar-foot { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; min-width: 0; }
+.metric-bar-head span { font-weight: 700; }
+.metric-bar-foot small { color: var(--ink-soft); }
+.metric-bar-foot .flag { font-style: normal; font-weight: 800; font-size: .84rem; }
+.bar-track { position: relative; display: block; height: 12px; border-radius: 6px; background: var(--surface-alt); overflow: hidden; }
+.bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--forest-soft); }
+.bar-zone { position: absolute; top: 0; bottom: 0; background: rgb(29 94 56 / 18%); }
+.bar-tick { position: absolute; top: -2px; bottom: -2px; width: 3px; margin-left: -1px; background: var(--ink); }
+.bar-ideal { width: 2px; background: repeating-linear-gradient(var(--ink) 0 3px, transparent 3px 5px); }
+.level-good .bar-fill { background: var(--good-ink); }
+.level-good .flag { color: var(--good-ink); }
+.level-close { border-color: #b88a1e; background: var(--close-bg); }
+.level-close .bar-fill { background: #b88a1e; }
+.level-close .flag { color: var(--close-ink); }
+.level-behind { border-color: var(--behind-ink); background: var(--behind-bg); }
+.level-behind .bar-fill { background: var(--behind-ink); }
+.level-behind .flag { color: var(--behind-ink); }
+.level-unknown .bar-fill { background: var(--ink-soft); }
+.level-unknown .flag { color: var(--ink-soft); }
+.metric-detail { display: grid; gap: 6px; border-top: 1px solid var(--line); padding: 10px 14px 14px; }
+.metric-detail p, .metric-detail h3 { margin: 0; }
+.metric-detail h3 { font-size: .9rem; }
+.contributor-list, .part-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.contributor-list > li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; }
+.contributor-list > li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.part-list { flex-basis: 100%; padding-left: 14px; }
+.part-list li { display: flex; justify-content: space-between; gap: 12px; color: var(--ink-soft); font-size: .88rem; }
+.estimate-tag { border-radius: 6px; background: var(--surface-alt); color: var(--ink-soft); padding: 1px 6px; font-size: .75rem; }
+.on-track-toggle, .meal-toggle { display: flex; width: 100%; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-alt); color: var(--ink); padding: 10px 14px; text-align: left; font: inherit; cursor: pointer; }
+.on-track-toggle span { color: var(--good-ink); font-weight: 700; }
+.meal-toggle { border: 0; background: transparent; padding: 0; }
+.meal-toggle > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.meal-toggle small { color: var(--ink-soft); }
+.meal-toggle .flag { font-style: normal; font-weight: 700; }
+.meal-card .plain-list li { flex-wrap: wrap; }
+.meal-card .plain-list li > span:first-child { flex: 1 1 180px; }

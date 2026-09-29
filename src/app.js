@@ -60,7 +60,7 @@ const HUEL_SEEDS = Object.freeze([
 ]);
 
 const clone = value => structuredClone(value);
-const FOCUS_DATA_KEYS = ['action', 'route', 'itemId', 'entryId', 'nutrientId', 'nutrientOrigin', 'date', 'ml', 'days', 'id', 'photoIndex'];
+const FOCUS_DATA_KEYS = ['action', 'route', 'itemId', 'entryId', 'nutrientId', 'nutrientOrigin', 'metricId', 'mealKey', 'date', 'ml', 'days', 'id', 'photoIndex'];
 const SAVED_MESSAGES = Object.freeze({
   'save-profile': 'Profile saved. Targets were recalculated.',
   'save-target-overrides': 'Target overrides saved.',
@@ -152,7 +152,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: rememberedDay(), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, onTrackOpen: false, expandedMetric: null, openMeals: [], addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
   // The day being viewed survives a reload (iOS reloads a backgrounded app, for example while the camera is
   // open, and applying an update reloads too) for an hour after it was last used, then it is today again.
   function rememberedDay() {
@@ -598,7 +598,16 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     ['transFatMaxG', 'Trans fat', 0, 0, 'g'],
     ['sodiumIdealMaxMg', 'Ideal sodium limit', 0, 10000, 'mg'],
     ['sodiumHardMaxMg', 'Sodium maximum', 0, 10000, 'mg'],
-    ['fiberCarbRatioDenominatorMax', 'Refined-heavy threshold', 1, 50, 'g carbohydrate per gram of fiber']
+    ['fiberCarbRatioDenominatorMax', 'Refined-heavy threshold', 1, 50, 'g carbohydrate per gram of fiber'],
+    ['carbsPercentMin', 'Carb range minimum', 0, 100, '%'],
+    ['carbsPercentMax', 'Carb range maximum', 0, 100, '%'],
+    ['fatPercentMin', 'Fat range minimum', 0, 100, '%'],
+    ['fatPercentMax', 'Fat range maximum', 0, 100, '%'],
+    ['mealCarbsMaxG', 'Carbs per meal', 10, 200, 'g'],
+    ['mealGlMax', 'GL per meal', 1, 100, 'GL'],
+    ['dailyGlMax', 'GL per day', 10, 400, 'GL'],
+    ['solubleFiberMinG', 'Soluble fiber minimum', 0, 50, 'g'],
+    ['solubleFiberPreferredG', 'Preferred soluble fiber', 0, 50, 'g']
   ]);
 
   function heartTargetOverrides(formData, base = store.get('targets').overrides ?? {}) {
@@ -620,6 +629,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     const effective = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(store.get('targets').computed ?? {}), ...overrides };
     if (effective.fiberPreferredG < effective.fiberMinG) throw new RangeError('Preferred fiber cannot be below the minimum.');
     if (effective.sodiumIdealMaxMg > effective.sodiumHardMaxMg) throw new RangeError('The ideal sodium limit cannot be above the maximum.');
+    if (effective.carbsPercentMin > effective.carbsPercentMax) throw new RangeError('The carb range minimum cannot be above the maximum.');
+    if (effective.fatPercentMin > effective.fatPercentMax) throw new RangeError('The fat range minimum cannot be above the maximum.');
+    if (effective.solubleFiberPreferredG < effective.solubleFiberMinG) throw new RangeError('Preferred soluble fiber cannot be below the minimum.');
     return overrides;
   }
 
@@ -1213,6 +1225,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         assertDate(action.date);
         state.selectedDate = action.date;
         state.dialog = null;
+        state.expandedMetric = null;
+        state.openMeals = [];
         break;
       case 'OPEN_NUTRIENT_DETAILS':
         if (!NUTRIENTS.some(nutrient => nutrient.id === action.nutrientId)) {
@@ -1419,6 +1433,20 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     }
     if (control.dataset.action === 'toggle-coverage') {
       state.coverageOpen = !state.coverageOpen;
+      render();
+    }
+    if (control.dataset.action === 'toggle-on-track') {
+      state.onTrackOpen = !state.onTrackOpen;
+      render();
+    }
+    if (control.dataset.action === 'toggle-metric') {
+      const id = String(control.dataset.metricId ?? '');
+      state.expandedMetric = state.expandedMetric === id ? null : id;
+      render();
+    }
+    if (control.dataset.action === 'toggle-meal') {
+      const key = String(control.dataset.mealKey ?? '');
+      state.openMeals = state.openMeals.includes(key) ? state.openMeals.filter(open => open !== key) : [...state.openMeals, key];
       render();
     }
     if (control.dataset.action === 'close-nutrient-details') {
