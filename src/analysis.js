@@ -106,7 +106,9 @@ export function resolveDraft(draft, selections = {}) {
     const scaledLabel = hasLabelValues && index === labelComponentIndex
       ? Object.fromEntries(Object.entries(labelValues).map(([key, value]) => [key, value * component.estimatedGrams / draft.labelServingGrams])) : {};
     const labelled = hasLabelValues && index === labelComponentIndex;
-    const fallback = !selected && !labelled && component.fallbackNutrients ? component.fallbackNutrients : undefined;
+    // The AI's estimate fills whatever the USDA record leaves unknown (USDA wins where it reports). A labelled
+    // product keeps exactly what its label says.
+    const fallback = !labelled && component.fallbackNutrients ? component.fallbackNutrients : undefined;
     const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined,
       label: Object.keys(scaledLabel).length ? scaledLabel : undefined, ai: fallback });
     componentCarbs.push(Object.fromEntries(['carbsG', 'fiberG'].filter(key => Number.isFinite(merged.values[key]))

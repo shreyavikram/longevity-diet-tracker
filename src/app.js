@@ -1714,8 +1714,46 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     return changed;
   }
 
+  // A "fill" from the inbox backfills a past log entry with estimates (her request, 2026-09-28): only nutrients
+  // that were unknown, or partial totals missing some ingredients, change. Known values stay exactly as logged.
+  const MICRO_KEYS = new Set(NUTRIENTS.filter(definition => definition.group === 'micros').map(definition => definition.key));
+  function fillLogEntry(fill) {
+    assertDate(fill.date);
+    const entries = store.get('log')[fill.date] ?? [];
+    const target = entries.find(candidate => candidate.id === fill.entryId);
+    if (!target) throw new Error('Log entry to fill was not found');
+    const values = {};
+    for (const [key, value] of Object.entries(fill.perServing ?? {})) {
+      if (key === 'micros' && value && typeof value === 'object') Object.assign(values, value);
+      else values[key] = value;
+    }
+    const entry = clone(target);
+    const backfilledAt = clock().toISOString();
+    let changed = false;
+    for (const [key, value] of Object.entries(values)) {
+      if (!Number.isFinite(value) || value < 0 || /Sugar/.test(key)) continue;
+      const holder = MICRO_KEYS.has(key) ? (entry.perServing.micros ??= {}) : entry.perServing;
+      const previous = entry.provenance?.[key];
+      if (Number.isFinite(holder[key]) && !previous?.partial) continue;
+      holder[key] = value;
+      entry.provenance ??= {};
+      if (previous?.partial) {
+        const { partial, missingFrom, ...rest } = previous;
+        entry.provenance[key] = { ...rest, source: 'mixed', confidence: 'low', backfilledAt, backfilledFor: missingFrom ?? [] };
+      } else {
+        entry.provenance[key] = { source: 'ai', confidence: 'low', backfilledAt };
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    entry.perServing = normalizeNutrients(entry.perServing);
+    entry.nutrients = scaleNutrients(entry.perServing, entry.servings);
+    updateDatedMap('log', fill.date, list => list.map(candidate => candidate.id === entry.id ? entry : candidate));
+  }
+
   // Entries added from outside the app (for example by Claude) through the cloud inbox.
   function applyInboxEntry(entry) {
+    if (entry?.kind === 'fill') return fillLogEntry(entry);
     const item = entry?.item;
     if (!item || typeof item.name !== 'string' || !item.name.trim() || !LIBRARY_ITEM_TYPES.some(type => type.id === item.type)) {
       throw new TypeError('Inbox item is invalid');
