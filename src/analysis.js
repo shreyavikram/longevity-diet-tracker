@@ -6,13 +6,6 @@ import { parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.
 const MICROS = new Set(NUTRIENTS.filter(item => item.group === 'micros').map(item => item.key));
 const CANONICAL = new Set([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => item.key));
 const known = value => Number.isFinite(value) && value >= 0;
-const words = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(' ').filter(word => word.length > 2);
-const clearMatch = (component, food) => {
-  const description = new Set(words(`${food.description} ${food.brand ?? ''}`));
-  const wanted = words(component.usdaSearch ?? component.name);
-  // Long descriptions carry extra qualifiers (chocolate milk for "milk"), so those still go to the AI.
-  return wanted.length > 0 && description.size <= wanted.length + 5 && wanted.every(word => description.has(word) || description.has(`${word}s`) || description.has(word.replace(/s$/, '')));
-};
 const flat = values => ({ ...(values ?? {}), ...(values?.micros ?? {}) });
 
 export function mergeNutrientSources({ manual, label, saved, usda, ai } = {}) {
@@ -312,23 +305,12 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     components.push({ ...component, candidates: candidates.slice(0, 8), selectedFdcId: null, matchResolved: true,
       ...(lookupError ? { lookupError } : {}) });
   }
-  // A top USDA record containing every search word (qualifiers such as vegan or raw included) is taken as is.
-  // Only the rest go to the AI, which saves a request on most entries; if that step fails, its own estimates stand in.
+  // The AI picks each ingredient's USDA record; if that step fails, its own estimates stand in.
   let choices = new Map();
-  const unclear = [];
-  for (const [index, component] of components.entries()) {
-    const top = component.candidates[0];
-    if (top && clearMatch(component, top)) choices.set(index, Number(top.fdcId));
-    else if (component.candidates.length) unclear.push(index);
-  }
-  if (unclear.length) {
-    try {
-      const picked = await requestMatchChoice({ components: components.map((component, index) =>
-        unclear.includes(index) ? component : { ...component, candidates: [] }), settings, fetchFn, signal, wait });
-      for (const [index, fdcId] of picked) if (unclear.includes(index)) choices.set(index, fdcId);
-    } catch (error) {
-      if (error.code === 'cancelled') throw error;
-    }
+  try {
+    choices = await requestMatchChoice({ components, settings, fetchFn, signal, wait });
+  } catch (error) {
+    if (error.code === 'cancelled') throw error;
   }
   for (const [index, component] of components.entries()) component.selectedFdcId = choices.get(index) ?? null;
   const resolved = resolveDraft({

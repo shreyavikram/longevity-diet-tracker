@@ -111,20 +111,10 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
-const PROVIDERS = ['gemini', 'openrouter', 'anthropic'];
-const PROVIDER_KEYS = { gemini: 'geminiApiKey', openrouter: 'openrouterApiKey', anthropic: 'anthropicApiKey' };
-const hasKey = (settings, provider) => Boolean(String(settings?.[PROVIDER_KEYS[provider]] ?? '').trim());
-
-// Gemini's free tier is the default provider; OpenRouter (free) and Anthropic (paid) are available in Settings.
+// Gemini's free tier is the default provider; Anthropic remains available when chosen in Settings.
 export function analysisProvider(settings) {
-  if (PROVIDERS.includes(settings?.provider)) return settings.provider;
-  return PROVIDERS.find(provider => hasKey(settings, provider)) ?? 'gemini';
-}
-
-// The chosen service first, then every other service that has a key, so a used-up free limit moves on at once.
-function providerChain(settings) {
-  const primary = analysisProvider(settings);
-  return [primary, ...PROVIDERS.filter(provider => provider !== primary)].filter(provider => hasKey(settings, provider));
+  if (settings?.provider === 'anthropic' || settings?.provider === 'gemini') return settings.provider;
+  return settings?.anthropicApiKey && !settings?.geminiApiKey ? 'anthropic' : 'gemini';
 }
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
@@ -152,71 +142,12 @@ async function callAnthropic({ settings, photos = [], userText, fetchFn, signal,
   return { text: anthropicText(payload), linkRead: false };
 }
 
-export const DEFAULT_OPENROUTER_MODEL = 'openrouter/free';
-
-async function callOpenRouter({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT }) {
-  const content = photos.map(photo => ({ type: 'image_url', image_url: { url: `data:${photo.type};base64,${photo.data}` } }));
-  content.push({ type: 'text', text: userText });
-  const response = await fetchFn('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${settings.openrouterApiKey}`,
-      'content-type': 'application/json',
-      'x-title': 'Longevity Diet Tracker'
-    },
-    body: JSON.stringify({ model: String(settings.openrouterModel || DEFAULT_OPENROUTER_MODEL).trim(), max_tokens: 1600,
-      messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content }] }),
-    signal
-  });
-  if (!response.ok) {
-    let message = '';
-    try { message = String((await response.json())?.error?.message ?? '').slice(0, 180); } catch { message = ''; }
-    if (response.status === 401 || response.status === 403) throw new AnalysisError('auth', 'OpenRouter rejected the API key. Check it in Settings.');
-    if (response.status === 429 || response.status === 402) throw new AnalysisError('rate_limit', 'The free OpenRouter limit is used up for now. Try again later or enter nutrition manually.');
-    throw new AnalysisError('service', `OpenRouter could not run this analysis.${message ? ` It said: ${message}` : ''}`);
-  }
-  let payload;
-  try { payload = await response.json(); } catch { throw invalid(); }
-  const text = payload?.choices?.[0]?.message?.content;
-  if (typeof text !== 'string') throw invalid();
-  return { text, linkRead: false };
-}
-
-const CALLS = { gemini: callGemini, anthropic: callAnthropic, openrouter: callOpenRouter };
-
-// A service that reported its free limit used up is skipped for a while when another one is available.
-const RESTING_MS = 10 * 60 * 1000;
-const restingUntil = new Map();
-
-// Tries each service in turn; a busy, used-up, or unreachable one hands over to the next instead of failing.
-async function callWithFallback(options) {
-  const keyed = providerChain(options.settings);
-  const awake = keyed.filter(provider => !(restingUntil.get(provider) > Date.now()));
-  const chain = awake.length ? awake : keyed;
-  if (!chain.length) throw new AnalysisError('missing_key', 'Add an AI key in Settings to use analysis.');
-  let lastError;
-  for (const [index, provider] of chain.entries()) {
-    const last = index === chain.length - 1;
-    try {
-      // With another service to fall back on, Gemini skips its slow waiting-and-retrying rounds.
-      return await CALLS[provider]({ ...options, quick: !last });
-    } catch (error) {
-      if (options.signal?.aborted || error?.name === 'AbortError' || error?.code === 'cancelled') throw error;
-      const retryable = !(error instanceof AnalysisError) || ['rate_limit', 'service', 'network'].includes(error.code);
-      if (error?.code === 'rate_limit') restingUntil.set(provider, Date.now() + RESTING_MS);
-      if (last || !retryable) throw error;
-      lastError = error;
-    }
-  }
-  throw lastError;
-}
-
 // Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
 const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const RETRY_AFTER_MS = 3000;
 const defaultWait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function callGemini({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait, quick = false }) {
+async function callGemini({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait }) {
   const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
   const parts = photos.map(photo => ({ inlineData: { mimeType: photo.type, data: photo.data } }));
   parts.push({ text: userText });
@@ -236,7 +167,7 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
   const tried = [];
   let response;
   let lastFailure;
-  rounds: for (let round = 0; round < (quick ? 1 : 3); round += 1) {
+  rounds: for (let round = 0; round < 3; round += 1) {
     if (round) {
       await wait(RETRY_AFTER_MS * round * round);
       if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
@@ -276,9 +207,8 @@ const MAX_TOTAL_PHOTO_BYTES = 14_000_000;
 export async function requestAnalysis({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
   if (!VALID_KINDS.has(kind)) throw new AnalysisError('invalid_input', 'Choose a supported analysis type.');
   const provider = analysisProvider(settings);
-  if (!providerChain(settings).length && provider === 'gemini') throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
-  if (!providerChain(settings).length && provider === 'openrouter') throw new AnalysisError('missing_key', 'Add a free OpenRouter API key in Settings to use analysis.');
-  if (!providerChain(settings).length && provider === 'anthropic') throw new AnalysisError('missing_key', 'Add an Anthropic API key in Settings to use analysis.');
+  if (provider === 'gemini' && !settings?.geminiApiKey) throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
+  if (provider === 'anthropic' && !settings?.anthropicApiKey) throw new AnalysisError('missing_key', 'Add an Anthropic API key in Settings to use analysis.');
   if (['foodPhoto', 'labelPhoto'].includes(kind) && !images.length) throw new AnalysisError('invalid_input', 'Select a photo for this analysis.');
   if (!text?.trim() && !images.length) throw new AnalysisError('invalid_input', 'Add a description or photo to analyze.');
   let photos = [];
@@ -297,7 +227,8 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
     }
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients });
-    const reply = await callWithFallback({ settings, photos, userText, fetchFn, signal, wait });
+    const call = provider === 'gemini' ? callGemini : callAnthropic;
+    const reply = await call({ settings, photos, userText, fetchFn, signal, wait });
     const parsed = parseResponse(reply.text);
     const hasLink = LINK_PATTERN.test(text);
     const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && (images.length > 0 || reply.linkRead));
@@ -327,18 +258,17 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
 // Asks the configured AI service to pick each ingredient's USDA record, so the person never has to.
 // Resolves a Map of component index to fdcId (or null when nothing fits).
 export async function requestMatchChoice({ components, settings, fetchFn = globalThis.fetch, signal, wait }) {
+  const provider = analysisProvider(settings);
   const listed = components.map((component, index) => ({ component: index, name: component.name, amount: component.householdAmount,
     candidates: component.candidates.map(food => ({ fdcId: food.fdcId, description: food.description, type: food.dataType,
       ...(food.brand ? { brand: food.brand } : {}) })) })).filter(item => item.candidates.length);
   if (!listed.length) return new Map();
   try {
-    const raw = String((await callWithFallback({ settings, userText: JSON.stringify({ ingredients: listed }),
+    const call = provider === 'gemini' ? callGemini : callAnthropic;
+    const raw = String((await call({ settings, userText: JSON.stringify({ ingredients: listed }),
       fetchFn, signal, wait, systemPrompt: MATCH_PROMPT })).text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     let parsed;
-    // Some free models wrap the JSON in a sentence; read the one object inside.
-    try { parsed = JSON.parse(raw); } catch {
-      try { parsed = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)); } catch { throw invalid(); }
-    }
+    try { parsed = JSON.parse(raw); } catch { throw invalid(); }
     if (!exactKeys(parsed, ['choices']) || !Array.isArray(parsed.choices)) throw invalid();
     const choices = new Map();
     for (const choice of parsed.choices) {

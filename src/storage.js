@@ -189,7 +189,6 @@ export function createStore({ storage, now = () => new Date() }) {
     if (!includeSecrets) {
       payload.settings.anthropicApiKey = '';
       payload.settings.geminiApiKey = '';
-      payload.settings.openrouterApiKey = '';
       payload.settings.foodDataCentralApiKey = '';
       payload.settings.cloudToken = '';
     }
@@ -214,7 +213,6 @@ export function createStore({ storage, now = () => new Date() }) {
     if (!includeSecrets) {
       prepared.settings.anthropicApiKey = '';
       prepared.settings.geminiApiKey = '';
-      prepared.settings.openrouterApiKey = '';
       prepared.settings.foodDataCentralApiKey = '';
       prepared.settings.cloudToken = '';
     }

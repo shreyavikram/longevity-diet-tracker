@@ -101,8 +101,6 @@ export const DEFAULT_STATE = Object.freeze({
     geminiApiKey: '',
     geminiModel: 'gemini-3.8-flash',
     anthropicApiKey: '',
-    openrouterApiKey: '',
-    openrouterModel: 'openrouter/free',
     foodDataCentralApiKey: '',
     cloudRepo: 'shreyavikram/longevity-diet-data',
     cloudToken: '',

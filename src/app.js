@@ -187,8 +187,30 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     state.addText = '';
   }
 
+  // Several foods typed with semicolons between them are analyzed and reviewed one at a time. The queue
+  // holds the ones still to come; photos go with the first item only.
+  function splitEntries(text) {
+    return String(text ?? '').split(';').map(part => part.trim()).filter(Boolean);
+  }
+
+  function advanceQueue() {
+    const queue = state.entryQueue;
+    if (!queue?.remaining.length) {
+      state.entryQueue = null;
+      return null;
+    }
+    const [next, ...remaining] = queue.remaining;
+    state.entryQueue = { ...queue, remaining, position: queue.position + 1 };
+    state.draft = null;
+    state.route = 'add';
+    setPhotos([]);
+    return startAnalysis({ kind: 'auto', text: next });
+  }
+
   function editAnalysisInput() {
-    const text = state.draft?.item?.analysis?.input?.text ?? state.analysis?.text ?? '';
+    const current = state.draft?.item?.analysis?.input?.text ?? state.analysis?.text ?? '';
+    const text = [current, ...(state.entryQueue?.remaining ?? [])].filter(Boolean).join('; ');
+    state.entryQueue = null;
     analysisGeneration += 1;
     analysisController?.abort();
     analysisController = null;
@@ -203,6 +225,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   function cancelAnalysis() {
     analysisGeneration += 1;
+    state.entryQueue = null;
     clearEntry();
     analysisController?.abort();
     analysisController = null;
@@ -220,7 +243,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       provider,
       ...(result.method ? { method: result.method } : {}),
       ...(result.labelReader ? { labelReader: clone(result.labelReader) } : {}),
-      model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : provider === 'openrouter' ? settings.openrouterModel || 'openrouter/free' : settings.model || 'claude-sonnet-5',
+      model: provider === 'on-device' ? 'label reader' : provider === 'gemini' ? settings.geminiModel || DEFAULT_GEMINI_MODEL : settings.model || 'claude-sonnet-5',
       input: { text: input.text, hadPhoto: Boolean(input.hadPhoto), ...(input.photos ? { photos: input.photos } : {}) },
       clarifications: (input.clarificationHistory ?? []).map(item => ({ question: item.prompt, answer: item.answer })),
       estimate: {
@@ -934,13 +957,11 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'SET_INTEGRATIONS':
         store.update('settings', settings => ({
           ...settings,
-          provider: ['gemini', 'openrouter', 'anthropic'].includes(action.provider) ? action.provider
+          provider: ['gemini', 'anthropic'].includes(action.provider) ? action.provider
             : String(action.anthropicApiKey ?? '').trim() && !String(action.geminiApiKey ?? '').trim() ? 'anthropic' : 'gemini',
           geminiApiKey: String(action.geminiApiKey ?? settings.geminiApiKey ?? '').trim(),
           geminiModel: String(action.geminiModel ?? settings.geminiModel ?? '').trim() || 'gemini-3.8-flash',
           anthropicApiKey: String(action.anthropicApiKey ?? '').trim(),
-          openrouterApiKey: String(action.openrouterApiKey ?? settings.openrouterApiKey ?? '').trim(),
-          openrouterModel: String(action.openrouterModel ?? settings.openrouterModel ?? '').trim() || 'openrouter/free',
           foodDataCentralApiKey: String(action.foodDataCentralApiKey ?? '').trim(),
           model: String(action.model ?? settings.model)
         }));
@@ -995,6 +1016,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         break;
       case 'CLOSE_CONFIRMATION':
         if (state.draft?.mode === 'analysis') clearEntry();
+        state.entryQueue = null;
         state.draft = null;
         break;
       case 'SET_LIBRARY_QUERY':
@@ -1103,6 +1125,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (route === 'progress') state.progressDate = localDate(clock());
     state.dialog = null;
     state.draft = null;
+    state.entryQueue = null;
     state.notice = null;
     state.dataStatus = '';
     clearEntry();
@@ -1121,6 +1144,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'open-manual-entry') dispatch({ type: 'OPEN_MANUAL_ENTRY' });
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
     if (control.dataset.action === 'edit-analysis-input') editAnalysisInput();
+    if (control.dataset.action === 'skip-queued-item') return advanceQueue();
     if (control.dataset.action === 'set-servings') {
       const input = control.form?.elements?.namedItem?.('servings');
       if (input) input.value = control.dataset.servings;
@@ -1327,7 +1351,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         // Photos still in the file box (if its change was not seen) join the attached ones.
         setPhotos([...analysisImages, ...formData.getAll('image').filter(file => file?.size)]);
         state.addText = String(formData.get('text') ?? '');
-        return startAnalysis({ kind: 'auto', text: formData.get('text') });
+        const items = splitEntries(state.addText);
+        state.entryQueue = items.length > 1 ? { remaining: items.slice(1), total: items.length, position: 1 } : null;
+        return startAnalysis({ kind: 'auto', text: items.length > 1 ? items[0] : state.addText });
       }
       case 'retry-analysis':
         if (state.analysis?.status === 'error') return startAnalysis({ kind: state.analysis.kind, text: state.analysis.text,
@@ -1376,8 +1402,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           geminiApiKey: formData.get('geminiApiKey'),
           geminiModel: formData.get('geminiModel'),
           anthropicApiKey: formData.get('anthropicApiKey'),
-          openrouterApiKey: formData.get('openrouterApiKey'),
-          openrouterModel: formData.get('openrouterModel'),
           foodDataCentralApiKey: formData.get('foodDataCentralApiKey'),
           model: formData.get('model')
         });
@@ -1415,6 +1439,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           dispatch({ type: 'SAVE_LIBRARY_ITEM', item });
           state.draft = null;
           clearEntry();
+          if (state.entryQueue?.remaining.length) return advanceQueue();
+          state.entryQueue = null;
           state.route = 'library';
           render();
         } else if (intent === 'log' || intent === 'complete') {
@@ -1441,6 +1467,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           state.selectedDate = day;
           state.draft = null;
           clearEntry();
+          if (state.entryQueue?.remaining.length) return advanceQueue();
+          state.entryQueue = null;
           state.route = 'today';
           render();
         } else {
@@ -1500,9 +1528,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     hasHistory: () => Object.keys(store.get('log')).length > 0 || store.get('bodyMetrics').length > 0,
     importData: text => {
       // A cloud restore keeps the keys typed on this device; backups never contain them.
-      const { geminiApiKey, anthropicApiKey, openrouterApiKey, foodDataCentralApiKey, cloudToken, cloudRepo } = store.get('settings');
+      const { geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo } = store.get('settings');
       store.importData(text);
-      store.update('settings', settings => ({ ...settings, geminiApiKey, anthropicApiKey, openrouterApiKey, foodDataCentralApiKey, cloudToken, cloudRepo }));
+      store.update('settings', settings => ({ ...settings, geminiApiKey, anthropicApiKey, foodDataCentralApiKey, cloudToken, cloudRepo }));
       ensureSetup();
     },
     applyInboxEntry,
