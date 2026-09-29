@@ -1,10 +1,12 @@
 import {
+  CARDIOMETABOLIC_TARGET_DEFAULTS,
   CONFIDENCE_LEVELS,
   DEFAULT_STATE,
   LIBRARY_ITEM_TYPES,
   MACRO_NUTRIENTS,
   NUTRIENTS,
-  NUTRIENT_SOURCES
+  NUTRIENT_SOURCES,
+  SOURCE_NUTRIENTS
 } from './constants.js';
 import {
   computeTargets,
@@ -20,6 +22,10 @@ import { createStore, StorageWriteError } from './storage.js';
 import { dateLabel, macroLine, renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
 import { analyzeInput } from './analysis.js';
 import { createTextRecognizer } from './ocr.js';
+import { extractIngredients } from './nutrition-label.js';
+import { deriveSugarBreakdown, FOOD_CLASSIFICATIONS } from './sugar.js';
+import { buildItemGlycemic, scaleGlycemic } from './glycemic.js';
+import { MEAL_TYPES, suggestMealIdentity } from './meals.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
@@ -167,6 +173,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   let listenersBound = false;
   let idSequence = 0;
   let pendingNutrientFocus = null;
+  let pendingMealFocus = null;
   let analysisController = null;
   let analysisGeneration = 0;
   let analysisImages = [];
@@ -263,6 +270,45 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     };
   }
 
+  // Food classification and ingredient evidence travel with an item and its log snapshots (not the normalized
+  // ingredient text copy, which is only needed while matching).
+  function sugarFields(source) {
+    const evidence = source?.ingredientEvidence;
+    return {
+      ...(source?.classification ? { classification: source.classification } : {}),
+      ...(source?.ingredientsText ? { ingredientsText: source.ingredientsText } : {}),
+      ...(evidence ? { ingredientEvidence: { freeSugarIngredients: clone(evidence.freeSugarIngredients ?? []), sugarAlcohols: clone(evidence.sugarAlcohols ?? []),
+        highIntensitySweeteners: clone(evidence.highIntensitySweeteners ?? []), partiallyHydrogenated: Boolean(evidence.partiallyHydrogenated) } } : {}),
+      ...(source?.sugarIssues?.length ? { sugarIssues: clone(source.sugarIssues) } : {}),
+      ...(source?.glycemic ? { glycemic: clone(source.glycemic) } : {})
+    };
+  }
+
+  // Reads an ingredient-list photo on the device. The photo is used only for this call and is never kept.
+  function mealFields(formData) {
+    const mealId = formData.get('mealId');
+    const mealType = formData.get('mealType');
+    return { ...(mealId ? { mealId: String(mealId) } : {}), ...(mealType ? { mealType: String(mealType) } : {}) };
+  }
+
+  async function readIngredients(form) {
+    if (!form || state.draft?.kind !== 'confirmation') return;
+    const formData = valuesFromForm(form);
+    const image = formData.get('ingredientImage');
+    if (!image || !image.size) throw new TypeError('Choose a photo of the ingredient list first.');
+    const text = String(await recognizeText(image) ?? '');
+    const list = extractIngredients(text) ?? text.replace(/\s+/g, ' ').trim();
+    if (!list) throw new TypeError('No ingredient list could be read from that photo. Type it instead.');
+    const withList = {
+      get: name => name === 'ingredientsText' ? list : name === 'ingredientImage' ? null : formData.get(name),
+      getAll: name => formData.getAll(name),
+      has: name => name === 'ingredientsText' || formData.has(name)
+    };
+    state.draft = { ...state.draft, item: itemFromConfirmation(withList, { allowIncomplete: true }),
+      servings: formData.get('servings') ?? state.draft?.servings };
+    render();
+  }
+
   function openAnalysisReview(result, input = {}) {
     const item = {
       id: null,
@@ -276,7 +322,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       components: result.components.map(component => ({ name: `${component.name}: ${component.householdAmount} (${component.estimatedGrams} g)` })),
       favorite: false,
       verified: false,
-      analysis: analysisRecord(result, input)
+      analysis: analysisRecord(result, input),
+      ...sugarFields(result)
     };
     state.draft = { kind: 'confirmation', mode: 'analysis', servings: 1, item, analysisReview: {
       totalServings: result.totalServings,
@@ -411,7 +458,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       computedTargets,
       effectiveTargets: resolveEffectiveTargets(data.targets),
       ui: { canUndoWater: (waterUndo.get(state.selectedDate)?.length ?? 0) > 0,
-        dataStatus: state.dataStatus, notice: state.notice, cloudStatus: state.cloudStatus, dayProgress: dayProgress(), ...pwaUi() }
+        dataStatus: state.dataStatus, notice: state.notice, now: clock(), cloudStatus: state.cloudStatus, dayProgress: dayProgress(), ...pwaUi() }
     });
     restoreFocus(focused);
     rememberDay();
@@ -426,6 +473,20 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         nutrientDialog.showModal();
       }
       nutrientDialog.focus?.();
+    }
+    const mealDialog = documentRef?.querySelector?.('.meal-dialog');
+    if (mealDialog) {
+      mealDialog.addEventListener?.('cancel', event => {
+        event.preventDefault?.();
+        dispatch({ type: 'CLOSE_MEAL_DETAILS' });
+      }, { once: true });
+      if (typeof mealDialog.showModal === 'function' && !mealDialog.open) mealDialog.showModal();
+      mealDialog.focus?.();
+    }
+    if (pendingMealFocus) {
+      const mealId = pendingMealFocus;
+      pendingMealFocus = null;
+      documentRef?.querySelector?.(`[data-action="open-meal-details"][data-meal-id="${globalThis.CSS?.escape?.(mealId) ?? mealId}"]`)?.focus?.();
     }
     if (pendingNutrientFocus) {
       const { nutrientId, nutrientOrigin } = pendingNutrientFocus;
@@ -517,13 +578,56 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     return new FormDataConstructor(form);
   }
 
+  // Each form changes only its own fields; a blank field returns that one target to its default.
   function targetOverridesFromForm(formData) {
-    const overrides = {};
+    const overrides = { ...(store.get('targets').overrides ?? {}) };
     for (const field of ['averageCalories', 'proteinG']) {
       const raw = formData.get(field);
-      if (raw !== null && raw !== '') overrides[field] = finiteNonNegative(raw, field);
+      if (raw === null) continue;
+      if (raw === '') delete overrides[field];
+      else overrides[field] = finiteNonNegative(raw, field);
     }
     return overrides;
+  }
+
+  const HEART_TARGET_FIELDS = Object.freeze([
+    ['freeSugarMaxG', 'Free sugar maximum', 0, 500, 'g'],
+    ['fiberMinG', 'Fiber minimum', 0, 100, 'g'],
+    ['fiberPreferredG', 'Preferred fiber', 0, 150, 'g'],
+    ['saturatedFatPercentMax', 'Saturated fat', 0, 10, '%'],
+    ['transFatMaxG', 'Trans fat', 0, 0, 'g'],
+    ['sodiumIdealMaxMg', 'Ideal sodium limit', 0, 10000, 'mg'],
+    ['sodiumHardMaxMg', 'Sodium maximum', 0, 10000, 'mg'],
+    ['fiberCarbRatioDenominatorMax', 'Refined-heavy threshold', 1, 50, 'g carbohydrate per gram of fiber']
+  ]);
+
+  function heartTargetOverrides(formData, base = store.get('targets').overrides ?? {}) {
+    const overrides = { ...base };
+    for (const [key, label, min, max, unit] of HEART_TARGET_FIELDS) {
+      const raw = formData.get(key);
+      if (raw === null) continue;
+      if (String(raw).trim() === '') {
+        delete overrides[key];
+        continue;
+      }
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < min || value > max) {
+        throw new RangeError(min === max ? `${label} must be ${min} ${unit}.`
+          : `${label} must be between ${min} and ${max}${unit === '%' ? '%' : ` ${unit}`}.`);
+      }
+      overrides[key] = value;
+    }
+    const effective = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(store.get('targets').computed ?? {}), ...overrides };
+    if (effective.fiberPreferredG < effective.fiberMinG) throw new RangeError('Preferred fiber cannot be below the minimum.');
+    if (effective.sodiumIdealMaxMg > effective.sodiumHardMaxMg) throw new RangeError('The ideal sodium limit cannot be above the maximum.');
+    return overrides;
+  }
+
+  function setHeartTarget(key, value) {
+    const overrides = { ...(store.get('targets').overrides ?? {}) };
+    if (value === null || value === CARDIOMETABOLIC_TARGET_DEFAULTS[key]) delete overrides[key];
+    else overrides[key] = value;
+    dispatch({ type: 'SET_TARGET_OVERRIDES', overrides: heartTargetOverrides({ get: () => null }, overrides) });
   }
 
   function saveLibraryItem(item) {
@@ -562,7 +666,27 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       confidence: canonical.confidence ?? null,
       assumptions: clone(canonical.assumptions ?? []),
       components: clone(canonical.components ?? []),
+      ...sugarFields(canonical),
+      ...(canonical.glycemic ? { glycemic: scaleGlycemic(canonical.glycemic, servings), glycemicPerServing: clone(canonical.glycemic) } : {}),
       ...(canonical.analysis ? { analysis: clone(canonical.analysis) } : {})
+    };
+  }
+
+  // Which meal an entry belongs to: a chosen existing meal on that date, a new meal, or the suggestion (the
+  // latest meal within 90 minutes, else a new one named by the time of day).
+  function mealIdentity(date, entries, { mealId, mealType } = {}, current = null) {
+    if (current && mealId === undefined && mealType === undefined) {
+      return { mealId: current.mealId ?? null, mealType: current.mealType ?? null, consumedAt: current.consumedAt ?? null };
+    }
+    const suggestion = suggestMealIdentity({ date, now: clock(), entries: entries.filter(entry => entry.id !== current?.id) });
+    const validType = MEAL_TYPES.some(option => option.id === mealType) ? mealType : null;
+    const existing = mealId && mealId !== 'new' ? entries.find(entry => entry.mealId === mealId) : null;
+    const chosenId = mealId === 'new' ? null : existing ? mealId : mealId === undefined && current?.mealId ? current.mealId : suggestion.mealId;
+    const sameMeal = chosenId ? entries.find(entry => entry.mealId === chosenId && entry.id !== current?.id) : null;
+    return {
+      mealId: chosenId ?? nextId('meal'),
+      mealType: validType ?? sameMeal?.mealType ?? current?.mealType ?? suggestion.mealType,
+      consumedAt: current?.consumedAt && current.mealId === chosenId ? current.consumedAt : suggestion.consumedAt
     };
   }
 
@@ -576,13 +700,16 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (item.type === 'supplement') {
       throw new TypeError('Use supplement completion instead of the food log');
     }
+    const dayEntries = store.get('log')[action.date] ?? [];
+    const meal = mealIdentity(action.date, dayEntries, { mealId: action.mealId, mealType: action.mealType });
     const entry = {
       ...snapshotFromItem(item, servings),
+      ...meal,
       id: nextId('log'),
       loggedAt: clock().toISOString(),
       loggedAtLocal: localTimestamp()
     };
-    updateDatedMap('log', action.date, entries => [...(entries ?? []), entry]);
+    updateDatedMap('log', action.date, entries => renameMeal([...(entries ?? []), entry], meal));
     if (item.id && library.some(candidate => candidate.id === item.id)) {
       store.update('library', items => items.map(candidate => candidate.id === item.id
         ? { ...candidate, lastUsedAt: entry.loggedAt }
@@ -600,19 +727,33 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       const moved = (store.get('log')[action.date] ?? []).find(entry => entry.id === action.entryId);
       if (!moved) return;
       updateDatedMap('log', action.date, entries => (entries ?? []).filter(entry => entry.id !== action.entryId));
-      updateDatedMap('log', action.newDate, entries => [...(entries ?? []), moved]);
+      // On its new day the entry joins a meal there (or starts one), never a meal id from the old day.
+      const meal = mealIdentity(action.newDate, store.get('log')[action.newDate] ?? [], {});
+      updateDatedMap('log', action.newDate, entries => [...(entries ?? []), { ...moved, ...meal }]);
       return;
     }
-    updateDatedMap('log', action.date, entries => (entries ?? []).map(entry => {
-      if (entry.id !== action.entryId) return entry;
-      if (action.item && action.item.type !== entry.type) return entry;
-      const replacement = action.item ? snapshotFromItem(action.item, servings, entry) : {
-        ...entry,
-        servings,
-        nutrients: scaleNutrients(entry.perServing, servings)
-      };
-      return { ...replacement, id: entry.id, loggedAt: entry.loggedAt, editedAt: clock().toISOString() };
-    }));
+    updateDatedMap('log', action.date, entries => {
+      let meal = null;
+      const edited = (entries ?? []).map(entry => {
+        if (entry.id !== action.entryId) return entry;
+        if (action.item && action.item.type !== entry.type) return entry;
+        const replacement = action.item ? snapshotFromItem(action.item, servings, entry) : {
+          ...entry,
+          servings,
+          nutrients: scaleNutrients(entry.perServing, servings),
+          ...(entry.glycemicPerServing ? { glycemic: scaleGlycemic(entry.glycemicPerServing, servings) } : {})
+        };
+        meal = mealIdentity(action.date, entries ?? [], { mealId: action.mealId, mealType: action.mealType }, entry);
+        return { ...replacement, ...(meal.mealId ? meal : {}), id: entry.id, loggedAt: entry.loggedAt, editedAt: clock().toISOString() };
+      });
+      return meal?.mealId ? renameMeal(edited, meal) : edited;
+    });
+  }
+
+  // A meal has one type: choosing a type for one of its foods renames the whole meal.
+  function renameMeal(entries, meal) {
+    if (!meal?.mealId || !meal.mealType) return entries;
+    return entries.map(entry => entry.mealId === meal.mealId && entry.mealType !== meal.mealType ? { ...entry, mealType: meal.mealType } : entry);
   }
 
   // Starring a logged meal saves it (one serving, as logged) as a Library favorite and links the entry to it;
@@ -628,6 +769,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     const item = { id: nextId('library'), type: entry.type, name: entry.name, servingLabel: entry.servingLabel,
       perServing: clone(entry.perServing ?? {}), provenance: clone(entry.provenance ?? {}), confidence: entry.confidence ?? null,
       assumptions: clone(entry.assumptions ?? []), components: clone(entry.components ?? []), favorite: true, verified: false,
+      ...sugarFields({ ...entry, glycemic: entry.glycemicPerServing }),
       ...(entry.analysis ? { analysis: clone(entry.analysis) } : {}) };
     saveLibraryItem(item);
     updateDatedMap('log', date, entries => (entries ?? []).map(candidate => candidate.id === entryId ? { ...candidate, itemId: item.id } : candidate));
@@ -697,11 +839,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (!allowIncomplete && (!name || !servingLabel)) {
       throw new TypeError('Name and household serving label are required');
     }
-    const perServing = clone(state.draft?.item?.perServing ?? {});
-    const provenance = clone(state.draft?.item?.provenance ?? {});
-    const definitions = [...MACRO_NUTRIENTS, ...NUTRIENTS.filter(nutrient => (
-      !MACRO_NUTRIENTS.some(macro => macro.key === nutrient.key)
-    ))];
+    let perServing = clone(state.draft?.item?.perServing ?? {});
+    let provenance = clone(state.draft?.item?.provenance ?? {});
+    const definitions = [...new Map([...MACRO_NUTRIENTS, ...NUTRIENTS, ...SOURCE_NUTRIENTS]
+      .map(definition => [definition.key, definition])).values()];
     for (const definition of definitions) {
       const raw = formData.get(`nutrient_${definition.key}`);
       if (raw === null) continue;
@@ -737,6 +878,49 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       );
     }
 
+    // The sugar split is re-derived from the reviewed values; a person's own free or intrinsic value wins, and a
+    // pair that does not add up to total sugar is refused rather than silently adjusted.
+    const draftItem = state.draft?.item ?? {};
+    const classificationRaw = formData.get('classification');
+    const classification = classificationRaw === null ? (draftItem.classification ?? 'other') : String(classificationRaw);
+    if (!FOOD_CLASSIFICATIONS.some(option => option.id === classification)) throw new TypeError('Food classification is invalid');
+    const ingredientsRaw = formData.get('ingredientsText');
+    const ingredientsText = (ingredientsRaw === null ? (draftItem.ingredientsText ?? '') : String(ingredientsRaw)).trim().slice(0, 2000);
+    const { micros = {}, ...topLevel } = perServing;
+    const flatValues = { ...topLevel, ...micros };
+    for (const key of ['freeSugarG', 'intrinsicSugarG']) {
+      if (provenance[key]?.method && provenance[key].method !== 'ingredient-estimate') {
+        delete flatValues[key];
+        delete provenance[key];
+      }
+    }
+    const sugar = deriveSugarBreakdown({ nutrients: flatValues, provenance, classification, ingredientsText });
+    if (!allowIncomplete && sugar.issues.includes('sugarSumConflict')) throw new RangeError('Free plus intrinsic sugar must equal total sugar.');
+    perServing = {};
+    for (const [key, value] of Object.entries(sugar.nutrients)) {
+      const group = NUTRIENTS.find(definition => definition.key === key)?.group;
+      if (group) (perServing[group] ??= {})[key] = value;
+      else perServing[key] = value;
+    }
+    provenance = sugar.provenance;
+
+    // Glycemic evidence: a person's own GI for the whole food, a deliberate "unknown", or the matched foods.
+    let glycemic = draftItem.glycemic ?? null;
+    const manualGiRaw = formData.get('manualGi');
+    const flatPerServing = { ...perServing, ...(perServing.micros ?? {}) };
+    if (formData.get('leaveGiUnknown')) {
+      glycemic = { components: [], availableCarbsG: null, gl: null, range: null, completeness: 'unknown', confidence: 'low', missingFrom: [], leftUnknown: true };
+    } else if (manualGiRaw !== null && String(manualGiRaw).trim() !== '') {
+      const value = Number(manualGiRaw);
+      if (!Number.isFinite(value) || value < 0 || value > 100) throw new RangeError('GI must be between 0 and 100.');
+      glycemic = buildItemGlycemic({ perServing: flatPerServing, manualGi: { value, sourceType: 'manual',
+        sourceNote: String(formData.get('manualGiSource') ?? '').trim().slice(0, 200), confidence: 'medium' } });
+    } else if (glycemic?.manualGi && manualGiRaw !== null) {
+      glycemic = null;
+    } else if (glycemic?.manualGi) {
+      glycemic = buildItemGlycemic({ perServing: flatPerServing, manualGi: glycemic.manualGi });
+    }
+
     const itemId = String(formData.get('itemId') ?? '').trim();
     const knownProvenance = Object.values(provenance);
     const commonConfidence = knownProvenance.length
@@ -755,6 +939,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       components: lines(formData.get('components')).map(component => ({ name: component })),
       favorite: formData.has('favorite'),
       verified: knownProvenance.length > 0 && knownProvenance.every(record => record.source === 'label'),
+      ...sugarFields({ classification, ingredientsText, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.issues, glycemic }),
       ...(state.draft?.item?.analysis ? { analysis: clone(state.draft.item.analysis) } : {})
     };
     if (type === 'supplement') {
@@ -794,8 +979,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         confidence: entry.confidence,
         assumptions: clone(entry.assumptions ?? []),
         components: clone(entry.components ?? []),
+        ...sugarFields({ ...entry, glycemic: entry.glycemicPerServing }),
         ...(entry.analysis ? { analysis: clone(entry.analysis) } : {})
-      }
+      },
+      meal: { mealId: entry.mealId ?? null, mealType: entry.mealType ?? null }
     };
   }
 
@@ -1031,14 +1218,22 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         if (!NUTRIENTS.some(nutrient => nutrient.id === action.nutrientId)) {
           throw new Error(`Unknown nutrient: ${action.nutrientId}`);
         }
-        if (action.nutrientOrigin !== 'attention') state.coverageOpen = true;
+        if (!['attention', 'cardiometabolic'].includes(action.nutrientOrigin)) state.coverageOpen = true;
         state.dialog = {
           kind: 'nutrientDetails',
           nutrientId: action.nutrientId,
-          nutrientOrigin: ['coverage', 'attention'].includes(action.nutrientOrigin)
+          nutrientOrigin: ['coverage', 'attention', 'cardiometabolic'].includes(action.nutrientOrigin)
             ? action.nutrientOrigin
             : 'coverage'
         };
+        break;
+      case 'OPEN_MEAL_DETAILS':
+        state.dialog = { kind: 'mealDetails', mealId: String(action.mealId) };
+        break;
+      case 'CLOSE_MEAL_DETAILS':
+        pendingMealFocus = state.dialog?.kind === 'mealDetails' ? state.dialog.mealId : null;
+        documentRef?.querySelector?.('.meal-dialog')?.close?.();
+        state.dialog = null;
         break;
       case 'CLOSE_NUTRIENT_DETAILS':
         pendingNutrientFocus = state.dialog?.kind === 'nutrientDetails'
@@ -1145,6 +1340,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'cancel-analysis') cancelAnalysis();
     if (control.dataset.action === 'edit-analysis-input') editAnalysisInput();
     if (control.dataset.action === 'skip-queued-item') return advanceQueue();
+    if (control.dataset.action === 'read-ingredients') return readIngredients(control.closest?.('form[data-action]') ?? control.form);
     if (control.dataset.action === 'set-servings') {
       const input = control.form?.elements?.namedItem?.('servings');
       if (input) input.value = control.dataset.servings;
@@ -1228,6 +1424,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (control.dataset.action === 'close-nutrient-details') {
       dispatch({ type: 'CLOSE_NUTRIENT_DETAILS' });
     }
+    if (control.dataset.action === 'set-saturated-fat-preset') setHeartTarget('saturatedFatPercentMax', Number(control.dataset.value));
+    if (control.dataset.action === 'reset-target-field' && HEART_TARGET_FIELDS.some(([key]) => key === control.dataset.field)) {
+      setHeartTarget(control.dataset.field, null);
+    }
+    if (control.dataset.action === 'open-meal-details') dispatch({ type: 'OPEN_MEAL_DETAILS', mealId: control.dataset.mealId });
+    if (control.dataset.action === 'close-meal-details') dispatch({ type: 'CLOSE_MEAL_DETAILS' });
   }
 
   // Keeps the "You'll log" total and the quick choices in step with the servings box, without re-rendering
@@ -1278,8 +1480,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       render();
     }
     if (form.dataset.action === 'confirm-item'
-      && event.target.name === 'type'
-      && state.draft?.mode !== 'logEdit') {
+      && (event.target.name === 'classification' || (event.target.name === 'type'
+      && state.draft?.mode !== 'logEdit'))) {
       const formData = valuesFromForm(form);
       state.draft = {
         ...state.draft,
@@ -1373,6 +1575,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         dispatch({ type: 'SET_TARGET_OVERRIDES', overrides: targetOverridesFromForm(formData) });
         break;
       }
+      case 'save-heart-targets': {
+        dispatch({ type: 'SET_TARGET_OVERRIDES', overrides: heartTargetOverrides(formData) });
+        break;
+      }
       case 'set-units':
         dispatch({ type: 'SET_UNITS', units: formData.get('units') });
         break;
@@ -1454,7 +1660,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
               newDate: day,
               entryId: state.draft.entryId,
               servings,
-              item
+              item,
+              ...mealFields(formData)
             });
           } else {
             // "Save as a favorite" keeps a new meal in the Library; for a saved meal it only changes the flag,
@@ -1462,7 +1669,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
             const existing = store.get('library').find(candidate => candidate.id === item.id);
             if (item.favorite && !existing) saveLibraryItem(item);
             else if (existing && Boolean(existing.favorite) !== Boolean(item.favorite)) saveLibraryItem({ ...existing, favorite: Boolean(item.favorite) });
-            dispatch({ type: 'LOG_ITEM', date: day, item, servings });
+            dispatch({ type: 'LOG_ITEM', date: day, item, servings, ...mealFields(formData) });
           }
           state.selectedDate = day;
           state.draft = null;

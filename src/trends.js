@@ -1,5 +1,6 @@
 import { NUTRIENTS } from './constants.js';
 import { dailySummary } from './calculations.js';
+import { cardiometabolicPeriod } from './cardiometabolic.js';
 
 const DAY_MS = 86_400_000;
 const PACE_BANDS = Object.freeze({
@@ -153,6 +154,8 @@ export function progressSummary(endDate, data, periodDays) {
     protein: { average: average(completeProtein, day => day.details.protein.total),
       completeDays: completeProtein.length, loggedDays: days.length,
       metDays: nutrients.protein.metDays },
-    nutrients
+    nutrients,
+    cardiometabolic: cardiometabolicPeriod(days.map(day => ({ cardiometabolic: day.cardiometabolic,
+      meals: day.meals.filter(meal => meal.metrics).map(meal => meal.metrics) })))
   };
 }

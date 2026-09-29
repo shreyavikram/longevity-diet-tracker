@@ -1,10 +1,12 @@
 import { requestAnalysis, requestMatchChoice, AnalysisError } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
-import { MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
-import { parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
+import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
+import { extractIngredients, parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
+import { deriveSugarBreakdown } from './sugar.js';
+import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
 
 const MICROS = new Set(NUTRIENTS.filter(item => item.group === 'micros').map(item => item.key));
-const CANONICAL = new Set([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => item.key));
+const CANONICAL = CANONICAL_NUTRIENT_KEYS;
 const known = value => Number.isFinite(value) && value >= 0;
 const flat = values => ({ ...(values ?? {}), ...(values?.micros ?? {}) });
 
@@ -33,6 +35,13 @@ export function mergeNutrientSources({ manual, label, saved, usda, ai } = {}) {
     }
   }
   return { values, provenance };
+}
+
+// Splits total sugar into free and intrinsic sugar once every source has been merged, so the food rules work
+// from the tracked serving's own values. Added sugar stays as its own fact.
+function withSugar(flatPerServing, provenance, { classification = 'other', ingredientsText = '', comparableAddedSugarG } = {}) {
+  const sugar = deriveSugarBreakdown({ nutrients: flatPerServing, provenance, classification, ingredientsText, comparableAddedSugarG });
+  return { perServing: nested(sugar.nutrients), provenance: sugar.provenance, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.issues };
 }
 
 function nested(values) {
@@ -88,6 +97,7 @@ export function resolveDraft(draft, selections = {}) {
   const labelBasis = labelComponent ? { componentIndex: labelComponentIndex, componentName: labelComponent.name,
     printedServingGrams: draft.labelServingGrams, trackedServingGrams,
     scaleFactor: trackedServingGrams / draft.labelServingGrams } : null;
+  const componentCarbs = [];
   for (const [index, component] of components.entries()) {
     const selected = component.candidates.find(food => String(food.fdcId) === String(component.selectedFdcId));
     const factor = selected?.basis === 'perServing' && selected.servingSize
@@ -99,6 +109,8 @@ export function resolveDraft(draft, selections = {}) {
     const fallback = !selected && !labelled && component.fallbackNutrients ? component.fallbackNutrients : undefined;
     const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined,
       label: Object.keys(scaledLabel).length ? scaledLabel : undefined, ai: fallback });
+    componentCarbs.push(Object.fromEntries(['carbsG', 'fiberG'].filter(key => Number.isFinite(merged.values[key]))
+      .map(key => [key, merged.values[key] / servings])));
     for (const [key, value] of Object.entries(merged.values)) {
       recipeTotal[key] = (recipeTotal[key] ?? 0) + value;
       reportedBy[key] = (reportedBy[key] ?? 0) + 1;
@@ -123,11 +135,20 @@ export function resolveDraft(draft, selections = {}) {
     provenance[key] = { ...provenance[key], partial: true,
       missingFrom: components.filter((component, index) => !reported.has(index)).map(component => component.name) };
   }
-  const perServing = nested(Object.fromEntries(Object.entries(recipeTotal).map(([key, value]) => [key, value / servings])));
+  const classification = draft.classification ?? 'other';
+  const ingredientsText = draft.ingredientsText ?? '';
+  const sugar = withSugar(Object.fromEntries(Object.entries(recipeTotal).map(([key, value]) => [key, value / servings])), provenance,
+    { classification, ingredientsText, comparableAddedSugarG: draft.comparableAddedSugarG });
+  const perServing = sugar.perServing;
+  for (const key of ['freeSugarG', 'intrinsicSugarG']) if (Number.isFinite(sugar.perServing[key])) recipeTotal[key] = sugar.perServing[key] * servings;
   const basisNote = labelBasis ? `Label values for ${labelBasis.componentName} scaled from ${labelBasis.printedServingGrams} g printed serving to ${labelBasis.trackedServingGrams} g of that ingredient per tracked serving.` : null;
   const assumptions = [...(draft.assumptions ?? [])];
   if (basisNote && !assumptions.includes(basisNote)) assumptions.push(basisNote);
-  return { ...draft, labelComponentIndex, components, assumptions, labelBasis, recipeTotal: nested(recipeTotal), perServing, provenance,
+  const glycemic = buildItemGlycemic({ perServing: { ...perServing, ...(perServing.micros ?? {}) },
+    components: components.map((component, index) => ({ name: component.name, nutrients: componentCarbs[index],
+      gi: matchGiEvidence(component) ?? matchGiEvidence({ name: component.usdaSearch, preparation: component.preparation }) })) });
+  return { ...draft, classification, ingredientsText, glycemic, labelComponentIndex, components, assumptions, labelBasis, recipeTotal: nested(recipeTotal), perServing,
+    provenance: sugar.provenance, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.sugarIssues,
     pendingCandidates: components.flatMap((component, index) => component.matchResolved
       || !component.candidates.length || component.candidates.some(food => String(food.fdcId) === String(component.selectedFdcId)) ? [] : [index]) };
 }
@@ -187,19 +208,33 @@ function applyStatedNutrients(draft, stated) {
     provenance[key] = { source: 'manual', confidence: 'high' };
   }
   const note = 'Nutrition numbers you entered were used as written.';
-  return { ...draft, perServing, provenance, statedNutrients: { ...stated },
+  // Typed sugar numbers change the free and intrinsic split, so derived values are recalculated from them.
+  for (const key of ['freeSugarG', 'intrinsicSugarG']) if (!Object.hasOwn(stated, key) && provenance[key]?.method) {
+    delete perServing[key];
+    delete provenance[key];
+  }
+  const { micros = {}, ...topLevel } = perServing;
+  const sugar = withSugar({ ...topLevel, ...micros }, provenance,
+    { classification: draft.classification ?? 'other', ingredientsText: draft.ingredientsText ?? '' });
+  return { ...draft, perServing: sugar.perServing, provenance: sugar.provenance, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.sugarIssues,
+    statedNutrients: { ...stated },
     assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
 }
 
 // A label read from text (typed, pasted, or recognized on the device) becomes a draft directly: no AI,
 // no USDA, no network.
-function labelTextDraft(label, text) {
+function labelTextDraft(label, text, labelText = text) {
   const before = String(text ?? '').split(/nutrition\s+facts|supplement\s+facts/i)[0].split('\n').map(line => line.trim()).filter(Boolean)[0];
   const name = before && !/calories|serving/i.test(before) ? before.slice(0, 80) : label.kind === 'supplement' ? 'Supplement (from label)' : 'Packaged food (from label)';
   const servingLabel = label.servingLabel ?? '1 serving';
-  const perServing = nested(label.nutrients);
-  const provenance = Object.fromEntries(Object.keys(label.nutrients).map(key => [key, { source: 'label', confidence: 'high' }]));
-  return { kind: 'labelPhoto', method: 'label-text', fromLabel: true, labelKind: label.kind, name, servingLabel, confidence: 'high',
+  const classification = label.kind === 'supplement' ? 'other' : 'composite';
+  const ingredientsText = extractIngredients(labelText) ?? '';
+  const sugar = withSugar(label.nutrients, Object.fromEntries(Object.keys(label.nutrients).map(key => [key, { source: 'label', confidence: 'high' }])),
+    { classification, ingredientsText });
+  const { perServing, provenance, ingredientEvidence, sugarIssues } = sugar;
+  const carbs = Object.fromEntries(['carbsG', 'fiberG'].filter(key => Number.isFinite(label.nutrients[key])).map(key => [key, label.nutrients[key]]));
+  const glycemic = buildItemGlycemic({ perServing: label.nutrients, components: [{ name, nutrients: carbs, gi: matchGiEvidence({ name }) }] });
+  return { classification, ingredientsText, ingredientEvidence, sugarIssues, glycemic, kind: 'labelPhoto', method: 'label-text', fromLabel: true, labelKind: label.kind, name, servingLabel, confidence: 'high',
     totalServings: 1, assumptions: ['Read from the nutrition label on this device; no AI or online lookup was used.'],
     components: [{ name, householdAmount: servingLabel, estimatedGrams: label.servingGrams ?? 0, usdaSearch: name, confidence: 'high',
       candidates: [], selectedFdcId: null, matchResolved: true }],
@@ -228,7 +263,7 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     const photoLabel = readings.reduce((best, reading) => !best || Object.keys(reading.nutrients).length > Object.keys(best.nutrients).length ? reading : best, null);
     labelReader = { ms: Date.now() - started, found: Boolean(photoLabel), characters: texts.join('').length,
       ...(images.length > 1 ? { photos: images.length } : {}), ...(failure ? { error: failure } : {}) };
-    if (photoLabel) return { status: 'estimate', draft: applyStatedNutrients({ ...labelTextDraft(photoLabel, text), labelReader }, typed) };
+    if (photoLabel) return { status: 'estimate', draft: applyStatedNutrients({ ...labelTextDraft(photoLabel, text, texts.join('\n')), labelReader }, typed) };
   }
   onStage('asking-ai');
   const parsed = await requestAnalysis({ kind, text, images, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
@@ -323,7 +358,9 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     totalServings: parsed.totalServings ?? 1,
     labelNutrients: parsed.labelNutrients ?? {},
     labelServingGrams: parsed.labelServingGrams ?? null,
-    labelComponentIndex: parsed.labelComponentIndex
+    labelComponentIndex: parsed.labelComponentIndex,
+    classification: parsed.classification ?? 'other',
+    ingredientsText: parsed.ingredientsText ?? ''
   });
   const draft = applyStatedNutrients(resolved, { ...parsed.statedNutrients, ...typed });
   return { status: 'estimate', draft: labelReader ? { ...draft, labelReader } : draft };

@@ -1,11 +1,12 @@
 import { AnalysisError } from './anthropic.js';
-import { MACRO_NUTRIENTS, NUTRIENTS } from '../constants.js';
+import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS } from '../constants.js';
 
-const CANONICAL = new Set([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => item.key));
+const CANONICAL = CANONICAL_NUTRIENT_KEYS;
 const NUTRIENT_ID_MAP = new Map([
   [1008, ['calories', 'KCAL']], [2047, ['calories', 'KCAL']], [2048, ['calories', 'KCAL']],
   [1003, ['proteinG', 'G']], [1005, ['carbsG', 'G']], [1004, ['fatG', 'G']], [1079, ['fiberG', 'G']],
-  [1258, ['saturatedFatG', 'G']], [1235, ['addedSugarG', 'G']], [1087, ['calciumMg', 'MG']],
+  [1258, ['saturatedFatG', 'G']], [1235, ['addedSugarG', 'G']],
+  [2000, ['totalSugarG', 'G']], [1063, ['totalSugarG', 'G']], [1257, ['transFatG', 'G']], [1086, ['sugarAlcoholG', 'G']], [1087, ['calciumMg', 'MG']],
   [1089, ['ironMg', 'MG']], [1090, ['magnesiumMg', 'MG']], [1092, ['potassiumMg', 'MG']],
   [1093, ['sodiumMg', 'MG']], [1095, ['zincMg', 'MG']], [1103, ['seleniumMcg', 'UG']],
   [1100, ['iodineMcg', 'UG']], [1190, ['folateDfeMcg', 'UG']],
@@ -16,6 +17,8 @@ const NAME_MAP = new Map([
   ['energy', 'calories'], ['protein', 'proteinG'], ['carbohydrate by difference', 'carbsG'],
   ['total lipid fat', 'fatG'], ['total dietary fiber', 'fiberG'], ['fiber total dietary', 'fiberG'],
   ['fatty acids total saturated', 'saturatedFatG'], ['sugars added', 'addedSugarG'],
+  ['sugars total including nlea', 'totalSugarG'], ['sugars total', 'totalSugarG'], ['fatty acids total trans', 'transFatG'],
+  ['sugar alcohols', 'sugarAlcoholG'], ['total sugar alcohols', 'sugarAlcoholG'],
   ['calcium ca', 'calciumMg'], ['iron fe', 'ironMg'], ['magnesium mg', 'magnesiumMg'],
   ['potassium k', 'potassiumMg'], ['sodium na', 'sodiumMg'], ['zinc zn', 'zincMg'],
   ['selenium se', 'seleniumMcg'], ['iodine i', 'iodineMcg'], ['folate dfe', 'folateDfeMcg'],
@@ -24,7 +27,7 @@ const NAME_MAP = new Map([
   ['alpha linolenic acid ala', 'alaG'], ['alpha linolenic acid', 'alaG'],
   ['pufa 22 6 n 3 dha', 'dhaMg'], ['pufa 20 5 n 3 epa', 'epaMg']
 ]);
-const EXPECTED_UNIT = Object.freeze({ calories: 'KCAL', proteinG: 'G', carbsG: 'G', fatG: 'G', fiberG: 'G', saturatedFatG: 'G', addedSugarG: 'G', calciumMg: 'MG', ironMg: 'MG', magnesiumMg: 'MG', potassiumMg: 'MG', zincMg: 'MG', seleniumMcg: 'UG', iodineMcg: 'UG', folateDfeMcg: 'UG', b12Mcg: 'UG', vitDIu: 'IU', alaG: 'G', epaMg: 'MG', dhaMg: 'MG', cholineMg: 'MG' });
+const EXPECTED_UNIT = Object.freeze({ calories: 'KCAL', proteinG: 'G', carbsG: 'G', fatG: 'G', fiberG: 'G', saturatedFatG: 'G', addedSugarG: 'G', totalSugarG: 'G', transFatG: 'G', sugarAlcoholG: 'G', calciumMg: 'MG', ironMg: 'MG', magnesiumMg: 'MG', potassiumMg: 'MG', zincMg: 'MG', seleniumMcg: 'UG', iodineMcg: 'UG', folateDfeMcg: 'UG', b12Mcg: 'UG', vitDIu: 'IU', alaG: 'G', epaMg: 'MG', dhaMg: 'MG', cholineMg: 'MG' });
 const clean = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const day = () => new Date().toISOString().slice(0, 10);
 

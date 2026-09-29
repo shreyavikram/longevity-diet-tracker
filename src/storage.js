@@ -102,6 +102,30 @@ function migrate(payload, now) {
         { from: currentVersion, to: 2, at: now().toISOString() }
       ]
     };
+    currentVersion = 2;
+  }
+  if (currentVersion < 3) {
+    // Free sugar replaces added sugar as the tracked limit (added sugar stays stored as a label fact), and
+    // trans fat is tracked. Logged entries are not touched: no sugar split or meal grouping is invented.
+    const tracked = Array.isArray(next.settings?.trackedNutrients)
+      ? [...new Set(next.settings.trackedNutrients.map(id => id === 'addedSugar' ? 'freeSugar' : id))]
+      : [...DEFAULT_STATE.settings.trackedNutrients];
+    if (!tracked.includes('freeSugar')) tracked.push('freeSugar');
+    if (!tracked.includes('transFat')) tracked.push('transFat');
+    next.settings = { ...clone(DEFAULT_STATE.settings), ...(isRecord(next.settings) ? next.settings : {}), trackedNutrients: tracked };
+    if (isRecord(next.targets?.overrides) && Number.isFinite(next.targets.overrides.fiberG)) {
+      const { fiberG, ...overrides } = next.targets.overrides;
+      next.targets = { ...next.targets, overrides: { fiberMinG: fiberG, ...overrides } };
+    }
+    next.meta = {
+      ...clone(DEFAULT_STATE.meta),
+      ...(isRecord(next.meta) ? next.meta : {}),
+      schemaVersion: 3,
+      migrations: [
+        ...((Array.isArray(next.meta?.migrations) && next.meta.migrations) || []),
+        { from: currentVersion, to: 3, at: now().toISOString() }
+      ]
+    };
   }
   return next;
 }

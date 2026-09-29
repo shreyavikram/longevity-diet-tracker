@@ -1,4 +1,5 @@
-import { MACRO_NUTRIENTS, NUTRIENTS } from '../constants.js';
+import { MACRO_NUTRIENTS, NUTRIENTS, SOURCE_NUTRIENTS } from '../constants.js';
+import { FOOD_CLASSIFICATIONS } from '../sugar.js';
 
 export class AnalysisError extends Error {
   constructor(code, message) {
@@ -19,7 +20,9 @@ const validStringArray = value => Array.isArray(value) && value.length <= 30 && 
 const VALID_KINDS = new Set(['auto', 'description', 'recipe', 'foodPhoto', 'labelPhoto']);
 const FALLBACK_KEYS = new Set(['calories', 'proteinG', 'carbsG', 'fatG', 'fiberG']);
 const LINK_PATTERN = /https?:\/\/\S+/i;
-const NUTRIENT_DEFINITIONS = [...new Map([...MACRO_NUTRIENTS, ...NUTRIENTS].map(item => [item.key, item])).values()];
+const NUTRIENT_DEFINITIONS = [...new Map([...MACRO_NUTRIENTS, ...NUTRIENTS, ...SOURCE_NUTRIENTS]
+  .filter(item => !['freeSugarG', 'intrinsicSugarG'].includes(item.key)).map(item => [item.key, item])).values()];
+const CLASSIFICATION_IDS = new Set(FOOD_CLASSIFICATIONS.map(item => item.id));
 const NUTRIENT_KEYS = new Set(NUTRIENT_DEFINITIONS.map(item => item.key));
 
 function anthropicText(message) {
@@ -64,12 +67,15 @@ function parseResponse(rawText) {
   }
   if (parsed?.status !== 'estimate' || !exactKeys(parsed,
     ['status', 'name', 'servingLabel', 'components', 'confidence', 'assumptions'],
-    ['totalServings', 'labelNutrients', 'labelServingGrams', 'labelComponentIndex', 'statedNutrients'])) throw invalid();
+    ['totalServings', 'labelNutrients', 'labelServingGrams', 'labelComponentIndex', 'statedNutrients', 'classification', 'ingredientsText'])) throw invalid();
+  if (parsed.classification !== undefined && !CLASSIFICATION_IDS.has(parsed.classification)) throw invalid();
+  if (parsed.ingredientsText !== undefined && (typeof parsed.ingredientsText !== 'string' || parsed.ingredientsText.length > 2000)) throw invalid();
   if (!nonempty(parsed.name) || !nonempty(parsed.servingLabel) || !confidence(parsed.confidence)
     || !validStringArray(parsed.assumptions) || !Array.isArray(parsed.components)
     || !parsed.components.length || parsed.components.length > 40) throw invalid();
   for (const component of parsed.components) {
-    if (!exactKeys(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients'])
+    if (!exactKeys(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients', 'preparation'])
+      || (component.preparation !== undefined && (typeof component.preparation !== 'string' || component.preparation.length > 120))
       || !nonempty(component.name) || !nonempty(component.householdAmount)
       || !nonempty(component.usdaSearch) || !Number.isFinite(component.estimatedGrams)
       || component.estimatedGrams <= 0 || component.estimatedGrams > 100000
@@ -101,7 +107,8 @@ Do not list plain water or ice as a component. Each component's "usdaSearch" is 
 There may be several photos; together they show this one entry (for example a meal and its package, or dishes eaten together), so count each food once. When "kind" is "auto", decide yourself whether the input is a meal, a recipe, or a photographed nutrition label. Any photo showing a Nutrition Facts or Supplement Facts panel is a label: transcribe every listed nutrient that has an allowed key into "labelNutrients" per printed serving, with "labelServingGrams" when the panel shows a gram weight.
 If the person's text itself states nutrition numbers for what they ate (for example copied from a label or a website), put each one in "statedNutrients" per serving exactly as written, using the allowed labelNutrients keys and units; never compute, convert, or guess these values. Numbers the person wrote override anything shown in the photos.
 If the description contains a product link, read the page to identify the exact product. If the page shows nutrition facts, transcribe them exactly into "labelNutrients" per printed serving with "labelServingGrams", just as for a label photo, and note in assumptions that they came from the product page. If you cannot read the page, do not guess its nutrition from the link text: use the product name, and say in assumptions that the page could not be read.
-For a recipe that makes more than one serving, include "totalServings": a positive number. For a clear photographed nutrition label only, you may add "labelNutrients" with exact transcribed values per printed label serving, a positive "labelServingGrams", and "labelComponentIndex": the zero-based index of the one component described by the photographed product label. Never apply label values to a whole prepared mixture containing other ingredients. If the label component or printed serving grams cannot be identified, ask a clarification question. Allowed labelNutrients keys and units: ${NUTRIENT_DEFINITIONS.map(item => `${item.key} (${item.unit})`).join(', ')}. Never infer or invent micronutrients or supplement doses. State assumptions explicitly. Allowed confidence: high, medium, low. No other fields.`;
+For a recipe that makes more than one serving, include "totalServings": a positive number. For a clear photographed nutrition label only, you may add "labelNutrients" with exact transcribed values per printed label serving, a positive "labelServingGrams", and "labelComponentIndex": the zero-based index of the one component described by the photographed product label. Never apply label values to a whole prepared mixture containing other ingredients. If the label component or printed serving grams cannot be identified, ask a clarification question. Allowed labelNutrients keys and units: ${NUTRIENT_DEFINITIONS.map(item => `${item.key} (${item.unit})`).join(', ')}. Never infer or invent micronutrients or supplement doses.
+Add "classification" for the whole entry, one of: ${[...CLASSIFICATION_IDS].join(', ')}. Use juice for fruit or vegetable juice, smoothie for blended or puréed drinks, honeySyrup for honey or syrups, wholeFruit, vegetable, unsweetenedDriedFruit or sweetenedDriedFruit, plainDairy or unsweetenedSoy for unsweetened milk or yogurt, sweetenedDairySoy for sweetened ones, composite for mixed meals and packaged foods, and other when the evidence is insufficient. If an ingredient list is visible or given, copy it into "ingredientsText" exactly. Never infer a numeric added-sugar amount from ingredient order. Each component may add "preparation": a short note that changes how quickly its carbohydrate is digested (for example boiled, baked, raw, puréed, whole grain, instant). State assumptions explicitly. Allowed confidence: high, medium, low. No other fields.`;
 
 function bytesToBase64(bytes) {
   let binary = '';

@@ -12,6 +12,8 @@ const TO_UNIT = {
 const FIELDS = [
   ['fatG', /(?:total\s+fat|(?<![a-z]\s)(?<![a-z])fat(?!\s*,)(?=[^\n\d]{0,12}\d))/, 'g'],
   ['saturatedFatG', /(?:saturated|sat\.)\s*fat/, 'g'],
+  ['transFatG', /trans\.?\s*fat/, 'g'],
+  ['totalSugarG', /total\s+sugars?/, 'g'],
   ['sodiumMg', /sodium/, 'mg'],
   ['carbsG', /(?:total\s+)?carb(?:ohydrates?|s|\.)?(?!\w)/, 'g'],
   ['fiberG', /(?:dietary\s+)?fib(?:er|re)/, 'g'],
@@ -244,4 +246,12 @@ export function parseNutritionLabel(input) {
   const servingLabel = serving ? serving[1].trim().replace(/\s+/g, ' ') : null;
   const grams = servingLabel ? /(\d+(?:\.\d+)?)\s*g\b/i.exec(servingLabel) ?? /\((\d+)9\)/.exec(servingLabel) : null;
   return { kind: kind ?? 'nutrition', servingLabel, servingGrams: grams ? Number(grams[1]) : null, nutrients, corrected };
+}
+
+// The ingredient list printed with a label ("Ingredients: oats, brown rice syrup, ..."), or null. Used only as
+// evidence for the free-sugar split and trans-fat warnings; it never changes the panel's numbers.
+export function extractIngredients(input) {
+  const match = /\bingredients?\s*[:;.]?\s*([\s\S]+?)(?=\n\s*\n|\b(?:contains|allergen|may contain|distributed by|manufactured|nutrition facts|supplement facts)\b|$)/i.exec(String(input ?? ''));
+  const list = match?.[1].replace(/\s+/g, ' ').trim();
+  return list && list.length >= 3 ? list.slice(0, 2000) : null;
 }

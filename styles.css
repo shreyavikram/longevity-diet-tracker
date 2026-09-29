@@ -288,7 +288,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 
 .coverage-state { display: inline-block; margin-bottom: 7px; color: var(--forest-soft); font-size: .76rem; font-weight: 850; }
 .coverage-state.state-attention, .coverage-state.state-high { color: #7f352a; }
-.nutrient-dialog {
+.nutrient-dialog, .meal-dialog {
   width: min(560px, calc(100% - 24px));
   max-height: calc(100dvh - 32px);
   overflow: auto;
@@ -299,10 +299,10 @@ h1[tabindex="-1"]:focus { outline: none; }
   padding: 18px;
   box-shadow: 0 24px 70px rgb(23 56 45 / 28%);
 }
-.nutrient-dialog::backdrop { background: rgb(25 53 45 / 38%); }
+.nutrient-dialog::backdrop, .meal-dialog::backdrop { background: rgb(25 53 45 / 38%); }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .dialog-heading h2 { margin-bottom: 14px; font-size: 1.35rem; }
-.nutrient-dialog h3 { margin: 18px 0 8px; font-size: .95rem; }
+.nutrient-dialog h3, .meal-dialog h3 { margin: 18px 0 8px; font-size: .95rem; }
 .detail-total { display: grid; gap: 3px; border-radius: 14px; background: var(--surface-alt); padding: 13px; }
 .detail-total strong { font-size: 1.35rem; }
 .detail-total span { color: var(--ink-soft); font-size: .84rem; }
@@ -413,3 +413,32 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .attached-photos .plain-list li { align-items: center; }
 .macro-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
 [hidden] { display: none !important; }
+
+/* Heart and glucose card and meal cards: every state has words and a symbol as well as a color. */
+.cardiometabolic-card .metric-grid { grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 520px) { .cardiometabolic-card .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.cardio-item { display: grid; min-width: 0; min-height: 44px; gap: 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); padding: 10px 12px; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.cardio-item span { color: var(--ink-soft); font-size: .84rem; }
+.cardio-item small { color: var(--ink-soft); }
+.cardio-item .flag { font-style: normal; font-weight: 700; font-size: .84rem; }
+.cardio-met, .cardio-preferred, .cardio-declared { border-color: var(--good-ink); background: var(--good-bg); }
+.cardio-met .flag, .cardio-preferred .flag, .cardio-declared .flag { color: var(--good-ink); }
+.cardio-inProgress, .cardio-aboveIdeal, .cardio-attention { border-color: #b88a1e; background: var(--close-bg); }
+.cardio-inProgress .flag, .cardio-aboveIdeal .flag, .cardio-attention .flag { color: var(--close-ink); }
+.cardio-high, .cardio-aboveMaximum { border-color: var(--behind-ink); background: var(--behind-bg); }
+.cardio-high .flag, .cardio-aboveMaximum .flag { color: var(--behind-ink); }
+.meal-card { display: grid; min-width: 0; gap: 8px; border: 1px solid var(--line); border-radius: 16px; padding: 14px; }
+.meal-card + .meal-card { margin-top: 10px; }
+.meal-card h3 { margin: 0; font-size: 1rem; }
+.meal-summary { display: grid; min-width: 0; min-height: 44px; gap: 3px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-alt); color: var(--ink); padding: 10px 12px; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.meal-summary .flag { font-style: normal; font-weight: 700; }
+.meal-summary small { color: var(--ink-soft); }
+.gl-high .meal-summary { border-color: var(--behind-ink); }
+.gl-high .meal-summary .flag, .meal-summary .flag:last-child { color: var(--behind-ink); }
+.gl-possiblyHigh .meal-summary, .gl-moderate .meal-summary { border-color: #b88a1e; }
+.gl-low .meal-summary { border-color: var(--good-ink); }
+.meal-controls, .sugar-review { border: 0; margin: 0; padding: 0; min-width: 0; }
+.meal-controls legend { font-weight: 600; padding: 0; }
+.cardio-item:focus-visible, .meal-summary:focus-visible { outline: 3px solid var(--forest); outline-offset: 2px; }
+.button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.glycemic-review .detail-list li { flex-wrap: wrap; overflow-wrap: anywhere; }

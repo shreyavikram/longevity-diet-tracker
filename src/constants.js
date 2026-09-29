@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const STORAGE_KEYS = Object.freeze([
   'profile',
@@ -16,7 +16,7 @@ export const STORAGE_KEYS = Object.freeze([
 export const DEFAULT_TRACKED_NUTRIENTS = Object.freeze([
   'b12', 'vitD', 'ala', 'epaDha', 'iron', 'calcium', 'zinc', 'iodine',
   'selenium', 'magnesium', 'potassium', 'folate', 'choline', 'sodium',
-  'saturatedFat', 'addedSugar'
+  'saturatedFat', 'freeSugar', 'transFat'
 ]);
 
 export const LIBRARY_ITEM_TYPES = Object.freeze([
@@ -33,6 +33,27 @@ export const MACRO_NUTRIENTS = Object.freeze([
   { key: 'fatG', label: 'Fat', unit: 'g' },
   { key: 'fiberG', label: 'Fiber', unit: 'g' }
 ]);
+
+// Nutrients stored as source facts but not tracked as daily targets. Added sugar is kept because it is the
+// label fact free sugar is derived from, but it is not interchangeable with free sugar.
+export const SOURCE_NUTRIENTS = Object.freeze([
+  { key: 'totalSugarG', label: 'Total sugar', unit: 'g' },
+  { key: 'addedSugarG', label: 'Added sugar', unit: 'g' },
+  { key: 'intrinsicSugarG', label: 'Intrinsic sugar', unit: 'g' },
+  { key: 'sugarAlcoholG', label: 'Sugar alcohol', unit: 'g' }
+]);
+
+// Editable heart and glucose planning references (AHA sodium and fat guidance; WHO free sugars).
+export const CARDIOMETABOLIC_TARGET_DEFAULTS = Object.freeze({
+  freeSugarMaxG: 15,
+  fiberMinG: 25,
+  fiberPreferredG: 35,
+  saturatedFatPercentMax: 6,
+  transFatMaxG: 0,
+  sodiumIdealMaxMg: 1500,
+  sodiumHardMaxMg: 2300,
+  fiberCarbRatioDenominatorMax: 10
+});
 
 export const NUTRIENT_SOURCES = Object.freeze([
   { id: 'manual', label: 'User-entered value' },
@@ -56,7 +77,7 @@ export const WEEKDAYS = Object.freeze([
 
 export const NUTRIENTS = Object.freeze([
   { id: 'protein', label: 'Protein', key: 'proteinG', unit: 'g', targetMin: 130, kind: 'minimum', evidence: 'Training target', veganPriority: true },
-  { id: 'fiber', label: 'Fiber', key: 'fiberG', unit: 'g', targetMin: 35, kind: 'minimum', evidence: 'Editable goal' },
+  { id: 'fiber', label: 'Fiber', key: 'fiberG', unit: 'g', targetMin: 25, targetPreferred: 35, kind: 'minimum', evidence: 'Editable goal' },
   { id: 'b12', label: 'Vitamin B12', key: 'b12Mcg', group: 'micros', unit: 'mcg', targetMin: 2.4, kind: 'minimum', evidence: 'RDA', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/VitaminB12-HealthProfessional/' },
   { id: 'vitD', label: 'Vitamin D', key: 'vitDIu', group: 'micros', unit: 'IU', targetMin: 600, targetPreferred: 1000, upperLimit: 4000, kind: 'minimum', evidence: 'RDA and configurable range', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/VitaminD-HealthProfessional/' },
   { id: 'ala', label: 'ALA omega-3', key: 'alaG', group: 'micros', unit: 'g', targetMin: 1.1, kind: 'minimum', evidence: 'AI', veganPriority: true, citation: 'https://ods.od.nih.gov/factsheets/Omega3FattyAcids-HealthProfessional/' },
@@ -70,10 +91,17 @@ export const NUTRIENTS = Object.freeze([
   { id: 'potassium', label: 'Potassium', key: 'potassiumMg', group: 'micros', unit: 'mg', targetMin: 2600, kind: 'minimum', evidence: 'AI', citation: 'https://ods.od.nih.gov/factsheets/Potassium-HealthProfessional/' },
   { id: 'folate', label: 'Folate', key: 'folateDfeMcg', group: 'micros', unit: 'mcg DFE', targetMin: 400, kind: 'minimum', evidence: 'RDA', citation: 'https://ods.od.nih.gov/factsheets/Folate-HealthProfessional/' },
   { id: 'choline', label: 'Choline', key: 'cholineMg', group: 'micros', unit: 'mg', targetMin: 425, upperLimit: 3500, kind: 'minimum', evidence: 'AI', citation: 'https://ods.od.nih.gov/factsheets/Choline-HealthProfessional/' },
-  { id: 'sodium', label: 'Sodium', key: 'sodiumMg', group: 'micros', unit: 'mg', targetMax: 2300, kind: 'maximum', evidence: 'CDRR' },
-  { id: 'saturatedFat', label: 'Saturated fat', key: 'saturatedFatG', unit: 'g', percentEnergyMax: 10, kind: 'maximum', evidence: 'Dietary guidance' },
-  { id: 'addedSugar', label: 'Added sugar', key: 'addedSugarG', unit: 'g', percentEnergyMax: 10, kind: 'maximum', evidence: 'Dietary guidance' }
+  { id: 'sodium', label: 'Sodium', key: 'sodiumMg', group: 'micros', unit: 'mg', targetMax: 2300, idealMax: 1500, kind: 'maximum', evidence: 'AHA ideal 1,500 mg; limit 2,300 mg', citation: 'https://www.heart.org/en/healthy-living/healthy-eating/eat-smart/sodium/how-much-sodium-should-i-eat-per-day' },
+  { id: 'saturatedFat', label: 'Saturated fat', key: 'saturatedFatG', unit: 'g', percentEnergyMax: 6, kind: 'maximum', evidence: 'AHA heart-focused limit', citation: 'https://www.heart.org/en/healthy-living/healthy-eating/eat-smart/fats/fats-in-foods' },
+  { id: 'freeSugar', label: 'Free sugar', key: 'freeSugarG', unit: 'g', targetMax: 15, kind: 'maximum', evidence: 'Editable goal' },
+  { id: 'transFat', label: 'Trans fat', key: 'transFatG', unit: 'g', targetMax: 0, kind: 'maximum', evidence: 'Editable goal' }
 ]);
+
+export const CANONICAL_NUTRIENT_KEYS = Object.freeze(new Set([
+  ...MACRO_NUTRIENTS.map(item => item.key),
+  ...NUTRIENTS.map(item => item.key),
+  ...SOURCE_NUTRIENTS.map(item => item.key)
+]));
 
 export const NUTRIENT_BY_ID = Object.freeze(Object.fromEntries(NUTRIENTS.map(item => [item.id, item])));
 

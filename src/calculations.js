@@ -1,4 +1,6 @@
-import { NUTRIENTS } from './constants.js';
+import { CARDIOMETABOLIC_TARGET_DEFAULTS, NUTRIENTS } from './constants.js';
+import { cardiometabolicDay } from './cardiometabolic.js';
+import { calculateMealMetrics, groupMealEntries } from './meals.js';
 
 const DEFICIT_BY_PACE = Object.freeze({ gentle: 0.1, moderate: 0.175, faster: 0.25 });
 const round25 = value => Math.round(value / 25) * 25;
@@ -39,7 +41,8 @@ export function computeTargets(profile) {
     weeklyCalories: averageCalories * 7,
     clampedToBmr,
     proteinG: Math.round(profile.weightKg * 2 / 5) * 5,
-    fiberG: 35,
+    fiberG: CARDIOMETABOLIC_TARGET_DEFAULTS.fiberMinG,
+    ...CARDIOMETABOLIC_TARGET_DEFAULTS,
     waterMl,
     trainingDayWaterMl: waterMl + 500,
     carbsG: null,
@@ -49,7 +52,8 @@ export function computeTargets(profile) {
 
 export function resolveEffectiveTargets(targets) {
   if (!targets?.computed) return null;
-  const computed = structuredClone(targets.computed);
+  // Targets computed before the heart and glucose fields existed get their defaults.
+  const computed = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...structuredClone(targets.computed) };
   const overrides = targets.overrides ?? {};
   const effective = { ...computed };
   if (Number.isFinite(overrides.averageCalories)) {
@@ -73,6 +77,7 @@ export function resolveEffectiveTargets(targets) {
   for (const [key, value] of Object.entries(overrides)) {
     if (key !== 'averageCalories' && Number.isFinite(value)) effective[key] = value;
   }
+  effective.fiberG = effective.fiberMinG;
   return effective;
 }
 
@@ -227,7 +232,10 @@ function summaryItems(data, date) {
     name: entry.name ?? 'Logged item',
     servingLabel: entry.servingLabel ?? '',
     nutrients: entry.nutrients ?? {},
-    provenance: entry.provenance ?? {}
+    provenance: entry.provenance ?? {},
+    ...(entry.ingredientEvidence ? { ingredientEvidence: entry.ingredientEvidence } : {}),
+    ...(entry.glycemic ? { glycemic: entry.glycemic } : {}),
+    ...(entry.mealId ? { mealId: entry.mealId, mealType: entry.mealType ?? 'other', consumedAt: entry.consumedAt ?? null } : {})
   }));
   return [...food, ...supplementCompletionItems(data.dayState, date)];
 }
@@ -235,10 +243,17 @@ function summaryItems(data, date) {
 function effectiveDefinition(definition, targets, calorieTarget) {
   const next = { ...definition };
   if (definition.id === 'protein' && Number.isFinite(targets?.proteinG)) next.targetMin = targets.proteinG;
-  if (definition.id === 'fiber' && Number.isFinite(targets?.fiberG)) next.targetMin = targets.fiberG;
-  if (Number.isFinite(definition.percentEnergyMax) && Number.isFinite(calorieTarget)) {
+  const fiberMin = targets?.fiberMinG ?? targets?.fiberG;
+  if (definition.id === 'fiber' && Number.isFinite(fiberMin)) next.targetMin = fiberMin;
+  if (definition.id === 'fiber' && Number.isFinite(targets?.fiberPreferredG)) next.targetPreferred = Math.max(next.targetMin, targets.fiberPreferredG);
+  if (definition.id === 'freeSugar' && Number.isFinite(targets?.freeSugarMaxG)) next.targetMax = targets.freeSugarMaxG;
+  if (definition.id === 'transFat' && Number.isFinite(targets?.transFatMaxG)) next.targetMax = targets.transFatMaxG;
+  if (definition.id === 'sodium' && Number.isFinite(targets?.sodiumHardMaxMg)) next.targetMax = targets.sodiumHardMaxMg;
+  if (definition.id === 'sodium' && Number.isFinite(targets?.sodiumIdealMaxMg)) next.idealMax = targets.sodiumIdealMaxMg;
+  if (definition.id === 'saturatedFat' && Number.isFinite(targets?.saturatedFatPercentMax)) next.percentEnergyMax = targets.saturatedFatPercentMax;
+  if (Number.isFinite(next.percentEnergyMax) && Number.isFinite(calorieTarget)) {
     const caloriesPerGram = definition.id === 'saturatedFat' ? 9 : 4;
-    next.targetMax = calorieTarget * definition.percentEnergyMax / 100 / caloriesPerGram;
+    next.targetMax = calorieTarget * next.percentEnergyMax / 100 / caloriesPerGram;
   }
   return next;
 }
@@ -338,6 +353,11 @@ export function dailySummary(date, stores) {
     }));
   const calories = Number.isFinite(nutrients.calories) ? nutrients.calories : 0;
   const caloriesComplete = calorieUnknownItems.length === 0;
+  const cardiometabolic = cardiometabolicDay({ items, nutrients, calorieEvidence: { complete: caloriesComplete },
+    targets: targets ?? {}, calorieTarget: targets?.calories });
+  // Meal metrics only for assigned meals; unassigned foods still count toward every daily total above.
+  const meals = groupMealEntries(items.filter(item => item.type !== 'supplement')).map(group => ({
+    ...group, metrics: group.mealId ? calculateMealMetrics(group.entries, targets?.fiberCarbRatioDenominatorMax ?? 10) : null }));
   return {
     date,
     trainingDay,
@@ -349,6 +369,8 @@ export function dailySummary(date, stores) {
       ? targets.calories - calories
       : null,
     details,
+    cardiometabolic,
+    meals,
     items
   };
 }
@@ -363,9 +385,8 @@ function weeklyDefinition(definition, effectiveTargets) {
   if (definition.id === 'protein' && Number.isFinite(effectiveTargets?.proteinG)) {
     adjusted.targetMin = effectiveTargets.proteinG * 7;
   }
-  if (definition.id === 'fiber' && Number.isFinite(effectiveTargets?.fiberG)) {
-    adjusted.targetMin = effectiveTargets.fiberG * 7;
-  }
+  const fiberMin = effectiveTargets?.fiberMinG ?? effectiveTargets?.fiberG;
+  if (definition.id === 'fiber' && Number.isFinite(fiberMin)) adjusted.targetMin = fiberMin * 7;
   return adjusted;
 }
 

@@ -1,11 +1,15 @@
 import {
+  CARDIOMETABOLIC_TARGET_DEFAULTS,
   CONFIDENCE_LEVELS,
   LIBRARY_ITEM_TYPES,
   MACRO_NUTRIENTS,
   NUTRIENTS,
   NUTRIENT_SOURCES,
+  SOURCE_NUTRIENTS,
   WEEKDAYS
 } from './constants.js';
+import { FOOD_CLASSIFICATIONS } from './sugar.js';
+import { groupMealEntries, MEAL_TYPES, suggestMealIdentity } from './meals.js';
 import {
   cmToIn,
   dailySummary,
@@ -175,7 +179,7 @@ function renderPaceOptions(pace) {
 }
 
 // Forms that render their own notice; errors from any other form use the page-level alert.
-const FORMS_WITH_NOTICES = new Set(['save-profile', 'save-target-overrides', 'set-units', 'save-tracked-nutrients',
+const FORMS_WITH_NOTICES = new Set(['save-profile', 'save-target-overrides', 'save-heart-targets', 'set-units', 'save-tracked-nutrients',
   'save-training-behavior', 'save-water-increments', 'save-integrations', 'save-body-metric', 'confirm-item', 'reset-data', 'save-cloud']);
 
 function formNotice(ui, formAction) {
@@ -207,15 +211,73 @@ export function renderTargetCards(targets, { showDerivation = true } = {}) {
   ${showDerivation ? `<p class="explanation">Based on an estimated ${format(targets.bmr)} kcal BMR and ${format(targets.maintenanceCalories)} kcal maintenance level. These are editable planning references, not guarantees.</p>` : ''}`;
 }
 
-function renderLogEntries(data, selectedDate) {
-  const entries = data.log[selectedDate] ?? [];
-  if (!entries.length) return '<p class="muted">No meals logged for this date yet.</p>';
+function renderEntryList(entries, data, selectedDate) {
   const favorites = new Set(data.library.filter(item => item.favorite).map(item => item.id));
   return `<ul class="plain-list">${entries.map(entry => { const favorite = favorites.has(entry.itemId); return `<li><span><strong>${escapeHtml(entry.name)}</strong><small>${format(entry.servings, 2)} × ${escapeHtml(entry.servingLabel)}</small></span><span>
     <button class="quiet-button icon-button favorite-toggle" type="button" data-action="favorite-log-entry" data-entry-id="${escapeHtml(entry.id)}" aria-pressed="${favorite}" aria-label="${favorite ? `Remove ${escapeHtml(entry.name)} from favorites` : `Save ${escapeHtml(entry.name)} as a favorite`}">${favorite ? '★' : '☆'}</button>
     <button class="quiet-button" type="button" data-action="edit-log-entry" data-entry-id="${escapeHtml(entry.id)}">Edit</button>
     <button class="quiet-button" type="button" data-action="delete-log-entry" data-entry-id="${escapeHtml(entry.id)}" aria-label="Delete ${escapeHtml(entry.name)} from ${escapeHtml(dateLabel(selectedDate))}">Delete</button>
   </span></li>`; }).join('')}</ul>`;
+}
+
+const GL_STATES = Object.freeze({
+  low: '✓ Low', moderate: '◐ Moderate', possiblyHigh: '↑? Possibly high', high: '↑ High', partial: '? Partly known', unknown: '? Unknown'
+});
+const CARDIO_STATES = Object.freeze({
+  met: '✓ Within target', preferred: '✓ Preferred amount', inProgress: '◐ In progress', high: '↑ Above target',
+  aboveIdeal: '↑ Above ideal', aboveMaximum: '⚠ Above limit', declared: '✓ None declared', attention: '! Check ingredients', unknown: '? Unknown'
+});
+const one = value => format(value, 1);
+
+function mealGlDisplay(metrics) {
+  if (metrics.glCompleteness === 'unknown') return 'Estimated GL unknown';
+  if (metrics.glCompleteness === 'partial') return `At least ${one(metrics.gl)} GL (estimated)`;
+  return `Estimated GL ${one(metrics.gl)}${metrics.glRange && metrics.glRange.min !== metrics.glRange.max ? ` (${one(metrics.glRange.min)} to ${one(metrics.glRange.max)})` : ''}`;
+}
+
+function renderMealGroups(meals, data, selectedDate) {
+  if (!meals.length) return '<p class="muted">No meals logged for this date yet.</p>';
+  const logged = new Map((data.log?.[selectedDate] ?? []).map(entry => [entry.id, entry]));
+  return meals.map(group => {
+    const time = /T(\d{2}:\d{2})/.exec(String(group.consumedAt ?? ''))?.[1];
+    const title = group.mealId ? `${mealTypeLabel(group.mealType)}${time ? ` · ${time}` : ''}` : 'Unassigned';
+    const metrics = group.metrics;
+    const summary = metrics ? `<button class="meal-summary" type="button" data-action="open-meal-details" data-meal-id="${escapeHtml(group.mealId)}">
+        <span><strong>${escapeHtml(mealGlDisplay(metrics))}</strong> <em class="flag">${escapeHtml(GL_STATES[metrics.glState])}</em></span>
+        <span>Fiber ratio ${escapeHtml(metrics.fiberCarbLabel)}${metrics.refinedHeavy ? ' · <em class="flag">! Refined-heavy</em>' : ''} · Protein ${escapeHtml(formatNutrient(metrics.proteinG, 'g'))}${metrics.unknownProteinItems.length ? ' known' : ''}</span>
+        <small>${escapeHtml(formatNutrient(metrics.carbsG, 'g'))} carbohydrate · ${escapeHtml(formatNutrient(metrics.availableCarbsG, 'g'))} available${metrics.missingGiItems.length ? ` · GI unavailable for ${escapeHtml(metrics.missingGiItems.join(', '))}` : ''}</small>
+      </button>` : '<p class="muted">Assign these foods to see meal calculations. Edit a food to choose its meal.</p>';
+    return `<article class="meal-card gl-${escapeHtml(metrics?.glState ?? 'none')}"><h3>${escapeHtml(title)}</h3>${summary}${renderEntryList(group.entries.map(entry => logged.get(entry.id) ?? entry), data, selectedDate)}</article>`;
+  }).join('');
+}
+
+function renderCardiometabolicCard(summary) {
+  if (!summary) return '';
+  const items = [summary.freeSugar, summary.fiber, summary.saturatedFat, summary.transFat, summary.sodium];
+  return `<section class="card stack cardiometabolic-card" aria-labelledby="heart-glucose-title"><h2 id="heart-glucose-title">Heart and glucose</h2>
+    <div class="metric-grid">${items.map(item => `<button class="cardio-item cardio-${escapeHtml(item.state)}" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="cardiometabolic">
+      <span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.display)}</strong><small>${escapeHtml(item.targetDisplay)}</small><em class="flag">${escapeHtml(CARDIO_STATES[item.state] ?? item.state)}</em></button>`).join('')}</div>
+    <p class="muted">Planning references, not a diagnosis. Values marked "at least" are missing data from some foods.</p></section>`;
+}
+
+function renderMealDetails(meal) {
+  if (!meal?.metrics) return '';
+  const metrics = meal.metrics;
+  const rows = meal.entries.map(entry => {
+    const evidence = entry.glycemic;
+    const components = (evidence?.components ?? []).filter(component => component.material !== false || component.gi);
+    return `<li><div><strong>${escapeHtml(entry.name)}</strong><small>${Number.isFinite(evidence?.gl) && evidence.completeness !== 'unknown' ? `GL ${escapeHtml(one(evidence.gl))}${evidence.completeness === 'partial' ? ' (partly known)' : ''}` : 'GL unknown'} · ${escapeHtml(formatNutrient(entry.nutrients?.carbsG, 'g'))} carbohydrate · ${escapeHtml(formatNutrient(entry.nutrients?.fiberG, 'g'))} fiber</small>
+      ${components.length ? `<ul class="detail-list">${components.map(component => `<li><span>${escapeHtml(component.name)}: ${component.gi ? `GI ${escapeHtml(component.gi.value)}${component.gi.range ? ` (${escapeHtml(one(component.gi.range.min))} to ${escapeHtml(one(component.gi.range.max))})` : ''} as ${escapeHtml(component.gi.referenceName ?? 'a match')}, ${escapeHtml(component.gi.confidence ?? 'low')} confidence, <a href="${escapeHtml(component.gi.sourceUrl ?? '')}" target="_blank" rel="noreferrer">${escapeHtml(component.gi.sourceName ?? 'source')}</a>` : 'no GI match'}</span><span>${escapeHtml(formatNutrient(component.availableCarbsG, 'g'))} available</span></li>`).join('')}</ul>` : ''}</div></li>`;
+  }).join('');
+  return `<dialog class="meal-dialog" tabindex="-1" aria-labelledby="meal-detail-title">
+    <div class="dialog-heading"><div><span class="flag">${escapeHtml(GL_STATES[metrics.glState])}</span><h2 id="meal-detail-title">${escapeHtml(mealTypeLabel(meal.mealType))} details</h2></div><button class="quiet-button icon-button" type="button" data-action="close-meal-details" aria-label="Close meal details">×</button></div>
+    <div class="detail-total"><strong>${escapeHtml(mealGlDisplay(metrics))}</strong><span>Fiber ratio ${escapeHtml(metrics.fiberCarbLabel)} · Protein ${escapeHtml(formatNutrient(metrics.proteinG, 'g'))}</span></div>
+    <section aria-labelledby="meal-foods-heading"><h3 id="meal-foods-heading">Foods and GI matches</h3><ul class="detail-list">${rows}</ul></section>
+    ${metrics.missingGiItems.length ? `<p class="detail-label">GI unavailable for: ${escapeHtml(metrics.missingGiItems.join(', '))}. Their GL is not counted, so the total is a lower bound.</p>` : ''}
+    <section class="evidence-note" aria-labelledby="meal-formula-heading"><h3 id="meal-formula-heading">How this is estimated</h3>
+      <p>GL = GI × available carbohydrate ÷ 100, where available carbohydrate is carbohydrate minus fiber. Above 20 is high, 11 to 20 moderate, 10 or less low. A meal is marked high only when even the low end of its range is above 20.</p>
+      <p>This is a planning estimate, not a prediction of your own glucose response. Portion, preparation, ripeness, and the rest of the meal all change it. Protein and fat are shown for context and are not subtracted.</p></section>
+  </dialog>`;
 }
 
 function renderSupplementSchedule(data, selectedDate) {
@@ -337,7 +399,8 @@ function renderToday(data, state, ui = {}) {
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
     <section class="card" aria-labelledby="protein-calories-heading"><h2 id="protein-calories-heading">Protein and calories</h2><div class="primary-metrics"><article${statusClass(proteinStatus)}><span>Protein</span><strong>${escapeHtml(formatNutrient(protein.total, 'g'))}</strong><small>of ${escapeHtml(formatNutrient(protein.target, 'g'))}</small>${statusFlag(proteinStatus)}</article><article${statusClass(calorieStatus)}>${dailyCalorieCopy}${statusFlag(calorieStatus)}</article></div><p class="weekly-budget">${weeklyCalorieCopy} The effective weekly average is ${escapeHtml(format(daily.targets?.averageCalories ?? 0))} kcal.</p></section>
     <section class="card stack" aria-labelledby="secondary-metrics-heading"><h2 id="secondary-metrics-heading">Fiber, water, and macros</h2><div class="metric-grid">${macros.map(([label, value, unit, target]) => { const status = Number.isFinite(target) ? statusOf(value, target) : null; return `<article${statusClass(status)}><span>${escapeHtml(label)}</span><strong>${escapeHtml(formatNutrient(value, unit))}</strong>${Number.isFinite(target) ? `<small>of ${escapeHtml(formatNutrient(target, unit))}</small>` : '<small>from known values</small>'}${statusFlag(status)}</article>`; }).join('')}<article${statusClass(waterStatus)}><span>Water</span><strong>${escapeHtml(formatWater(daily.waterMl, data.settings.units))} logged</strong><small>of ${escapeHtml(formatWater(daily.targets?.waterMl ?? 0, data.settings.units))}</small>${statusFlag(waterStatus)}</article></div><div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, data.settings.units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, data.settings.units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>
-    <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Logged meals</h2>${renderLogEntries(data, selectedDate)}</section>
+    ${renderCardiometabolicCard(daily.cardiometabolic)}
+    <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Logged meals</h2>${renderMealGroups(daily.meals, data, selectedDate)}</section>
     <button class="primary-button full-width add-action" type="button" data-action="navigate" data-route="add">Add food or supplement</button>
     <section class="card stack" aria-labelledby="today-supplements"><h2 id="today-supplements">Scheduled supplements</h2>${renderSupplementSchedule(data, selectedDate)}</section>
     <section class="card attention-card" aria-labelledby="attention-heading"><h2 id="attention-heading">Needs attention</h2>${incompleteSupplements.length || needsAttention.length ? `<ol class="attention-list">${incompleteSupplements.map(item => `<li><strong>Scheduled today:</strong> ${escapeHtml(item.name)} has not been marked complete.</li>`).join('')}${needsAttention.map(item => `<li><button class="text-button" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="attention"><strong>${escapeHtml(item.label)}</strong>: ${escapeHtml(COVERAGE_LABELS[item.state])}</button></li>`).join('')}</ol>` : '<p class="muted">No tracked nutrient or scheduled supplement needs attention in this view.</p>'}</section>
@@ -349,6 +412,7 @@ function renderToday(data, state, ui = {}) {
 <div class="coverage-grid">${trackedCoverage.map(item => `<button class="coverage-item state-${escapeHtml(item.state)}" type="button" data-action="open-nutrient-details" data-nutrient-id="${escapeHtml(item.id)}" data-nutrient-origin="coverage"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(COVERAGE_LABELS[item.state])}</strong><small>${escapeHtml(formatNutrient(item.total, item.unit))}</small></button>`).join('')}</div></div>` : ''}
     </section>
     ${renderNutrientDetails(dialogItem)}
+    ${state.dialog?.kind === 'mealDetails' ? renderMealDetails(daily.meals.find(meal => meal.mealId === state.dialog.mealId)) : ''}
   </section>`;
 }
 
@@ -407,6 +471,94 @@ function renderAdd({ data, state }) {
 function macroBox(definition, item) {
   const value = nutrientValue(item.perServing ?? {}, definition);
   return `<label class="macro-box">${escapeHtml(definition.label)} (${escapeHtml(definition.unit)})<input name="nutrient_${escapeHtml(definition.key)}" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(Number.isFinite(value) ? editableNumber(value) : '')}" placeholder="Unknown"></label>`;
+}
+
+const SUGAR_FIELDS = ['totalSugarG', 'addedSugarG', 'freeSugarG', 'intrinsicSugarG']
+  .map(key => [...SOURCE_NUTRIENTS, ...NUTRIENTS].find(definition => definition.key === key));
+
+// How a sugar value is known, in words: a label value, the person's own, a database value, derived by a food
+// rule, an estimate (shown with ≈ and its range), or unknown.
+function sugarEvidence(provenance) {
+  if (!provenance) return 'Unknown';
+  if (provenance.method === 'ingredient-estimate') return 'Estimated';
+  if (['food-rule', 'difference'].includes(provenance.method)) return 'Derived';
+  if (provenance.source === 'label') return 'Label value';
+  if (provenance.source === 'manual') return 'Your value';
+  if (['usda', 'usdaBranded', 'saved'].includes(provenance.source)) return 'Database value';
+  return 'Estimated';
+}
+
+function sugarAmount(item, key) {
+  const value = item.perServing?.[key];
+  const provenance = item.provenance?.[key];
+  if (!Number.isFinite(value)) return 'unknown';
+  const range = provenance?.estimatedRange;
+  return range ? `≈ ${formatNutrient(value, 'g')} (${formatNutrient(range.min, 'g')} to ${formatNutrient(range.max, 'g')})` : formatNutrient(value, 'g');
+}
+
+function sugarSummary(item) {
+  const hasSugar = SUGAR_FIELDS.some(definition => Number.isFinite(item.perServing?.[definition.key])) || item.sugarIssues?.length;
+  if (!hasSugar) return '';
+  const free = item.provenance?.freeSugarG;
+  const parts = [`${sugarAmount(item, 'totalSugarG')} total`,
+    `${sugarAmount(item, 'freeSugarG')} free (${sugarEvidence(free)})`, `${sugarAmount(item, 'intrinsicSugarG')} intrinsic`];
+  const issues = [
+    item.sugarIssues?.includes('freeSugarAmountUnknown') ? 'Free sugar amount unknown: a sweetener is listed but no amount is printed.' : '',
+    item.sugarIssues?.includes('sugarSumConflict') ? 'Free plus intrinsic sugar does not match total sugar; please review.' : '',
+    item.ingredientEvidence?.partiallyHydrogenated ? 'Possible trans fat below label rounding threshold (partially hydrogenated oil).' : ''
+  ].filter(Boolean);
+  return `<p class="muted"><strong>Sugar:</strong> ${escapeHtml(parts.join(' · '))}</p>${issues.map(text => `<p class="form-status">${escapeHtml(text)}</p>`).join('')}`;
+}
+
+export const mealTypeLabel = type => MEAL_TYPES.find(option => option.id === type)?.label ?? 'Unassigned';
+const clockTime = consumedAt => /T(\d{2}:\d{2})/.exec(String(consumedAt ?? ''))?.[1] ?? '';
+
+// Which meal this food is part of: an existing meal on the selected day, or a new one.
+function mealControls({ data, state, ui }) {
+  const entries = data.log?.[state.selectedDate] ?? [];
+  const draft = state.draft;
+  const suggestion = draft.mode === 'logEdit' && draft.meal?.mealId
+    ? draft.meal
+    : suggestMealIdentity({ date: state.selectedDate, now: ui.now ?? new Date(), entries });
+  const meals = groupMealEntries(entries.filter(entry => entry.id !== draft.entryId)).filter(group => group.mealId);
+  const chosen = meals.some(group => group.mealId === suggestion.mealId) ? suggestion.mealId : 'new';
+  return `<fieldset class="meal-controls stack"><legend>Meal</legend><div class="field-grid">
+    <label>Part of<select name="mealId"><option value="new"${selected(chosen, 'new')}>A new meal</option>${meals.map(group => `<option value="${escapeHtml(group.mealId)}"${selected(chosen, group.mealId)}>${escapeHtml(`${mealTypeLabel(group.mealType)}${clockTime(group.consumedAt) ? ` at ${clockTime(group.consumedAt)}` : ''}`)}</option>`).join('')}</select></label>
+    <label>Meal type<select name="mealType">${MEAL_TYPES.map(option => `<option value="${option.id}"${selected(suggestion.mealType ?? 'other', option.id)}>${escapeHtml(option.label)}</option>`).join('')}</select></label>
+  </div></fieldset>`;
+}
+
+function glycemicReview(item) {
+  const glycemic = item.glycemic;
+  const per = { ...(item.perServing ?? {}), ...(item.perServing?.micros ?? {}) };
+  const available = Number.isFinite(per.carbsG) && Number.isFinite(per.fiberG) ? Math.max(0, per.carbsG - per.fiberG) : null;
+  if (!glycemic && !(available >= 1)) return '';
+  const status = !glycemic ? 'No GI evidence yet, so GL is unknown.'
+    : glycemic.leftUnknown ? 'GI left unknown by you.'
+      : glycemic.completeness === 'unknown' ? 'No GI match for these foods, so GL is unknown.'
+        : `${glycemic.completeness === 'partial' ? 'At least ' : ''}${one(glycemic.gl)} GL per serving${glycemic.range && glycemic.range.min !== glycemic.range.max ? ` (${one(glycemic.range.min)} to ${one(glycemic.range.max)})` : ''}, ${glycemic.confidence ?? 'low'} confidence${glycemic.manualGi ? `, from your GI of ${glycemic.manualGi.value}` : ''}.`;
+  const matches = (glycemic?.components ?? []).filter(component => component.gi || component.material);
+  return `<section class="stack glycemic-review" aria-labelledby="glycemic-review-title"><h2 id="glycemic-review-title">Glycemic estimate</h2>
+    <p><strong>${escapeHtml(status)}</strong> ${Number.isFinite(available) ? `${escapeHtml(formatNutrient(available, 'g'))} available carbohydrate per serving.` : ''}</p>
+    ${matches.length ? `<ul class="detail-list">${matches.map(component => `<li><span>${escapeHtml(component.name)}</span><span>${component.gi ? `GI ${escapeHtml(component.gi.value)} as ${escapeHtml(component.gi.referenceName ?? 'a match')} (${escapeHtml(component.gi.preparation ?? '')}; ${escapeHtml(component.gi.sourceName ?? '')})` : 'No GI match'}</span></li>`).join('')}</ul>` : ''}
+    <div class="field-grid"><label>Glycemic index (0 to 100)<input name="manualGi" type="number" min="0" max="100" step="1" inputmode="numeric" value="${escapeHtml(glycemic?.manualGi?.value ?? '')}" placeholder="Use matched foods"></label>
+    <label>GI source note<input name="manualGiSource" maxlength="200" value="${escapeHtml(glycemic?.manualGi?.sourceNote ?? '')}" placeholder="Where this GI came from"></label></div>
+    <label class="choice inline-choice"><input name="leaveGiUnknown" type="checkbox"${checked(glycemic?.leftUnknown)}><span>Leave GI unknown</span></label>
+    <p class="muted">GI is never required to log a food. GL is a planning estimate, not a prediction of your own glucose response.</p>
+  </section>`;
+}
+
+function sugarReview(item) {
+  const reasons = item.provenance?.freeSugarG?.reasons ?? [];
+  return `<section class="stack sugar-review" aria-labelledby="sugar-review-title"><h2 id="sugar-review-title">Sugar breakdown</h2>
+    <p class="muted">Free sugar is added sugar plus sugar in honey, syrups, juice, and smoothies. Sugar inside whole fruit, vegetables, and plain milk is intrinsic. Added sugar from the label is kept separately.</p>
+    <label>Food classification<select name="classification">${FOOD_CLASSIFICATIONS.map(option => `<option value="${option.id}"${selected(item.classification ?? 'other', option.id)}>${escapeHtml(option.label)}</option>`).join('')}</select></label>
+    <div class="field-grid">${SUGAR_FIELDS.map(definition => nutrientInput(definition, item)).join('')}</div>
+    <p class="muted">Free sugar: ${escapeHtml(sugarEvidence(item.provenance?.freeSugarG))}${reasons.length ? `. ${escapeHtml(reasons.join('; '))}` : ''}</p>
+    <label>Ingredient list<textarea name="ingredientsText" rows="4" placeholder="Paste or read the ingredient list">${escapeHtml(item.ingredientsText ?? '')}</textarea></label>
+    <label>Ingredient-list photo<input name="ingredientImage" type="file" accept="image/jpeg,image/png,image/webp,image/heic"></label>
+    <button class="secondary-button" type="button" data-action="read-ingredients">Read ingredient list</button>
+  </section>`;
 }
 
 function nutrientInput(definition, item, { amount = true } = {}) {
@@ -488,7 +640,8 @@ function renderConfirmation({ data, state, ui = {} }) {
   const tracked = data.settings.trackedNutrients
     .map(id => NUTRIENTS.find(nutrient => nutrient.id === id))
     .filter(Boolean)
-    .filter(nutrient => !MACRO_NUTRIENTS.some(macro => macro.key === nutrient.key));
+    .filter(nutrient => !MACRO_NUTRIENTS.some(macro => macro.key === nutrient.key))
+    .filter(nutrient => nutrient.key !== 'freeSugarG');
   const assumptions = Array.isArray(item.assumptions) ? item.assumptions.join('\n') : '';
   const components = Array.isArray(item.components)
     ? item.components.map(component => typeof component === 'string' ? component : component.name).filter(Boolean).join('\n')
@@ -513,6 +666,8 @@ function renderConfirmation({ data, state, ui = {} }) {
         <p class="review-totals"><strong>Per serving:</strong> <span data-review-totals>${escapeHtml(macroLine(item.perServing))}</span></p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${partialNote(item) ? `<p class="muted">${escapeHtml(partialNote(item))}</p>` : ''}
+        ${item.type === 'supplement' ? '' : sugarSummary(item)}
+        ${item.type === 'supplement' ? '' : mealControls({ data, state, ui })}
         ${item.type === 'supplement' ? '' : `<label class="choice inline-choice"><input type="checkbox" name="favorite"${checked(item.favorite)}><span>Save as a favorite for next time</span></label>`}
         ${formNotice(ui, 'confirm-item')}
         ${draft.mode === 'analysis' ? '<button class="secondary-button full-width" type="button" data-action="edit-analysis-input">Edit what I typed</button>' : ''}
@@ -532,6 +687,8 @@ function renderConfirmation({ data, state, ui = {} }) {
         ${recipeReview}
         <input type="hidden" name="itemId" value="${escapeHtml(item.id ?? '')}">
         <div class="field-grid">${typeField}<label>Household serving label<input name="servingLabel" required value="${escapeHtml(item.servingLabel ?? '')}" placeholder="1 bowl, 1 tablet, 2 scoops"></label></div>
+        ${item.type === 'supplement' ? '' : sugarReview(item)}
+        ${item.type === 'supplement' ? '' : glycemicReview(item)}
       <section class="stack"><h2>Details and evidence</h2>
         <label>Ingredient or component breakdown<textarea name="components" rows="4" placeholder="One component per line">${escapeHtml(components)}</textarea></label>
         <label>Assumptions<textarea name="assumptions" rows="3" placeholder="One assumption per line">${escapeHtml(assumptions)}</textarea></label>
@@ -618,7 +775,32 @@ function renderPeriodSummary(summary, tracked) {
         ? `${nutrient.metDays} of ${nutrient.completeDays} complete days met${nutrient.highDays ? `; ${nutrient.highDays} ${nutrient.highDays === 1 ? 'day' : 'days'} above reference` : ''}${nutrient.inProgressDays ? `; ${nutrient.inProgressDays} in progress` : ''}`
         : 'No complete days'}<small>${nutrient.completeDays} of ${nutrient.loggedDays} logged days have complete evidence</small></span></li>`;
     }).join('')}</ul></div>
+    ${renderCardiometabolicPeriod(summary.cardiometabolic)}
   </section>`;
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+
+function periodEvidence(metric, within = metric.withinDays) {
+  return metric.completeDays
+    ? `${within} of ${plural(metric.completeDays, 'complete day')} within target; ${metric.completeDays} of ${plural(metric.loggedDays, 'logged day')} ${metric.completeDays === 1 ? 'has' : 'have'} complete evidence`
+    : `No complete days; 0 of ${plural(metric.loggedDays, 'logged day')} have complete evidence`;
+}
+
+function renderCardiometabolicPeriod(cardio) {
+  if (!cardio || !cardio.freeSugar.loggedDays) return '';
+  const meals = cardio.meals;
+  const glCounts = [['high', 'high'], ['possiblyHigh', 'possibly high'], ['moderate', 'moderate'], ['low', 'low'], ['partial', 'partly known'], ['unknown', 'unknown']]
+    .filter(([key]) => meals[key]).map(([key, label]) => `${meals[key]} ${label}`);
+  return `<div class="stack"><h3>Heart and glucose</h3><ul class="coverage-summary-list">
+    <li><span>Free sugar: ${escapeHtml(periodEvidence(cardio.freeSugar))}</span></li>
+    <li><span>Fiber: minimum met on ${cardio.fiber.minimumDays} and preferred on ${cardio.fiber.preferredDays} of ${plural(cardio.fiber.loggedDays, 'logged day')}</span></li>
+    <li><span>Saturated fat: ${escapeHtml(periodEvidence(cardio.saturatedFat))}</span></li>
+    <li><span>Trans fat: ${cardio.transFat.declaredZeroDays} with 0 g declared, ${cardio.transFat.attentionDays} with an ingredient warning, ${cardio.transFat.positiveDays} with trans fat, of ${plural(cardio.transFat.loggedDays, 'logged day')}</span></li>
+    <li><span>Sodium: within the ideal limit on ${cardio.sodium.idealDays} and within the maximum on ${cardio.sodium.hardDays} of ${plural(cardio.sodium.completeDays, 'complete day')} (${plural(cardio.sodium.loggedDays, 'logged day')})</span></li>
+    <li><span>Meals by estimated GL: ${meals.total ? escapeHtml(glCounts.join(', ')) : 'no assigned meals'}</span></li>
+    <li><span>Refined-heavy meals: ${meals.refinedHeavy} of ${meals.withRatio} with a fiber ratio</span></li>
+  </ul></div>`;
 }
 
 export function renderProgress({ data, state, ui = {} }) {
@@ -661,6 +843,28 @@ function nutrientChecks(tracked) {
   return NUTRIENTS.map(nutrient => `<label class="check-row"><input type="checkbox" name="trackedNutrients" value="${nutrient.id}"${checked(tracked.includes(nutrient.id))}><span><strong>${escapeHtml(nutrient.label)}</strong><small>${escapeHtml(nutrient.evidence)}</small></span></label>`).join('');
 }
 
+const HEART_TARGET_INPUTS = [
+  ['freeSugarMaxG', 'Free sugar maximum (g)', 0, 500, 1],
+  ['fiberMinG', 'Fiber minimum (g)', 0, 100, 1],
+  ['fiberPreferredG', 'Preferred fiber (g)', 0, 150, 1],
+  ['saturatedFatPercentMax', 'Saturated fat (% of calories)', 0, 10, 0.5],
+  ['transFatMaxG', 'Trans fat (g)', 0, 0, 1],
+  ['sodiumIdealMaxMg', 'Ideal sodium limit (mg)', 0, 10000, 50],
+  ['sodiumHardMaxMg', 'Sodium maximum (mg)', 0, 10000, 50],
+  ['fiberCarbRatioDenominatorMax', 'Refined-heavy below 1 g fiber per (g carbohydrate)', 1, 50, 1]
+];
+
+function renderHeartTargets(targets, ui) {
+  const reference = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(targets.computed ?? {}) };
+  const overrides = targets.overrides ?? {};
+  return `<form class="card stack" data-action="save-heart-targets">
+    <div><h2>Heart and glucose targets</h2><p class="muted">Editable planning references, not medical advice. 1,500 mg is the ideal sodium limit and 2,300 mg the maximum. During the day saturated fat shows a gram budget from your calorie target; the final percentage uses the calories you actually logged.</p></div>
+    <div class="field-grid">${HEART_TARGET_INPUTS.map(([key, label, min, max, step]) => `<label>${escapeHtml(label)}<input name="${key}" type="number" min="${min}" max="${max}" step="${step}" inputmode="decimal" value="${escapeHtml(overrides[key] ?? '')}" placeholder="${escapeHtml(format(reference[key], 1))}"${min === max ? ' readonly' : ''}>${Number.isFinite(overrides[key]) ? `<button class="text-button" type="button" data-action="reset-target-field" data-field="${key}">Use default (${escapeHtml(format(CARDIOMETABOLIC_TARGET_DEFAULTS[key], 1))})</button>` : ''}</label>`).join('')}</div>
+    <div class="button-row"><button class="quiet-button" type="button" data-action="set-saturated-fat-preset" data-value="6">Heart-focused 6%</button><button class="quiet-button" type="button" data-action="set-saturated-fat-preset" data-value="10">General 10%</button></div>
+    ${formNotice(ui, 'save-heart-targets')}<button class="secondary-button" type="submit">Save heart and glucose targets</button>
+  </form>`;
+}
+
 export function renderSettings({ data, ui = {} }) {
   const { profile, settings, targets, library, meta } = data;
   const provider = analysisProvider(settings);
@@ -685,6 +889,7 @@ export function renderSettings({ data, ui = {} }) {
       </div>
       ${formNotice(ui, 'save-target-overrides')}<button class="secondary-button" type="submit">Save target overrides</button>
     </form>
+    ${renderHeartTargets(targets, ui)}
     <form class="card stack" data-action="set-units">
       <div><h2>Display units</h2><p class="muted">This changes display and entry fields only.</p></div>
       <label>Units<select name="units"><option value="imperial"${selected(settings.units, 'imperial')}>US units</option><option value="metric"${selected(settings.units, 'metric')}>Metric</option></select></label>
