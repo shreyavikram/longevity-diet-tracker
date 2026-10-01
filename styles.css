@@ -1,19 +1,33 @@
 :root {
   color-scheme: light;
-  --ink: #19352d;
-  --ink-soft: #52645e;
-  --paper: #f7f5ee;
-  --surface: #fffefa;
-  --surface-alt: #edf2e8;
-  --forest: #17382d;
-  --forest-soft: #315d4b;
-  --lime: #d8ef99;
-  --peach: #f5d0b1;
-  --line: #dbe1d8;
-  --danger: #9b3c2d;
-  --shadow: 0 10px 34px rgb(23 56 45 / 8%);
-  --radius: 22px;
-  font-family: Inter, ui-rounded, "SF Pro Rounded", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Nutrient colors (her pick, 2026-10-01): near-black ink on a cool white page, and each nutrient owns one
+     saturated color (below) that carries white text at 5:1 or better. "forest" is now the ink used for actions. */
+  --ink: #16161d;
+  --ink-soft: #565866;
+  --paper: #f4f4f8;
+  --surface: #ffffff;
+  --surface-alt: #ececf2;
+  --forest: #16161d;
+  --forest-soft: #3d3f4d;
+  --lime: #ffd27a;
+  --peach: #ffb38a;
+  --line: #e2e2ea;
+  --danger: #a32116;
+  --shadow: 0 2px 10px rgb(22 22 40 / 6%);
+  --radius: 20px;
+  --n-calories: #c43d08;
+  --n-protein: #b8235a;
+  --n-water: #1a66d1;
+  --n-carbs: #8a5600;
+  --n-gl: #6b5f00;
+  --n-fat: #2f5c8c;
+  --n-saturatedFat: #6a3fa0;
+  --n-transFat: #5b4a66;
+  --n-fiber: #12744f;
+  --n-solubleFiber: #0b6a73;
+  --n-sodium: #4a3fc4;
+  --n-freeSugar: #a8287f;
+  font-family: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
 }
 
@@ -26,9 +40,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   color: var(--ink);
-  background:
-    radial-gradient(circle at 90% -5%, rgb(216 239 153 / 45%), transparent 35%),
-    var(--paper);
+  background: var(--paper);
 }
 
 button, input, select, textarea { font: inherit; }
@@ -44,7 +56,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 input, select, textarea {
   width: 100%;
-  border: 1px solid #bfcac3;
+  border: 1px solid #c9cad6;
   border-radius: 12px;
   background: #fff;
   color: var(--ink);
@@ -53,7 +65,7 @@ input, select, textarea {
 }
 
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible, a:focus-visible {
-  outline: 3px solid #79a98f;
+  outline: 3px solid var(--n-water);
   outline-offset: 2px;
 }
 
@@ -90,8 +102,8 @@ p { line-height: 1.55; }
   align-items: center;
   gap: 10px;
   min-height: 58px;
-  border-bottom: 1px solid rgb(219 225 216 / 80%);
-  background: rgb(247 245 238 / 88%);
+  border-bottom: 1px solid rgb(226 226 234 / 80%);
+  background: rgb(244 244 248 / 88%);
   padding: max(8px, env(safe-area-inset-top)) 18px 8px;
   font-weight: 850;
   letter-spacing: -.02em;
@@ -104,8 +116,8 @@ p { line-height: 1.55; }
   height: 34px;
   place-items: center;
   border-radius: 11px 11px 11px 3px;
-  background: var(--forest);
-  color: var(--lime);
+  background: var(--n-calories);
+  color: #fff;
 }
 
 .local-badge {
@@ -141,7 +153,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .stack { display: grid; gap: 14px; }
 
 .card, .hero-card {
-  border: 1px solid rgb(219 225 216 / 92%);
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: var(--surface);
   padding: 18px;
@@ -156,11 +168,11 @@ h1[tabindex="-1"]:focus { outline: none; }
 }
 
 .hero-card .eyebrow { color: var(--lime); }
-.hero-card p { margin-bottom: 0; color: #d7e3dd; }
+.hero-card p { margin-bottom: 0; color: #d9dae3; }
 .attention-card { border-left: 5px solid var(--peach); }
 
 .step-card { position: relative; display: grid; gap: 16px; overflow: hidden; }
-.step-number { position: absolute; top: 12px; right: 15px; color: #e5ebe5; font-size: 3rem; font-weight: 900; line-height: 1; }
+.step-number { position: absolute; top: 12px; right: 15px; color: #e6e6ee; font-size: 3rem; font-weight: 900; line-height: 1; }
 .step-card > div:nth-child(2) { padding-right: 42px; }
 
 .field-grid, .metric-grid, .choice-grid, .check-grid { display: grid; gap: 12px; }
@@ -218,8 +230,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .evidence-list { max-height: 260px; overflow: auto; }
 .evidence-list a { display: block; min-height: 44px; color: var(--forest-soft); padding: 9px 0; }
 .inline-form { display: grid; gap: 12px; }
-.danger-zone { border-color: #dfbdb7; }
-.disclaimer-card { background: #f3eadf; }
+.danger-zone { border-color: #e9b8b2; }
+.disclaimer-card { background: #fff3e6; }
 .empty-page { min-height: 70vh; display: grid; align-content: center; }
 
 .progress-page > * + * { margin-top: 14px; }
@@ -233,13 +245,13 @@ h1[tabindex="-1"]:focus { outline: none; }
 .reading-actions button { padding-inline: 10px; }
 .trend-figure { min-width: 0; margin: 0; }
 .trend-chart { display: block; width: 100%; max-width: 580px; height: auto; overflow: visible; }
-.chart-axis { stroke: #9caaa0; stroke-width: 1; }
-.chart-raw { fill: none; stroke: #7a9486; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.chart-rolling { fill: none; stroke: var(--forest); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
-.chart-point { fill: #7a9486; }
+.chart-axis { stroke: #a4a6b4; stroke-width: 1; }
+.chart-raw { fill: none; stroke: #8a8ca0; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.chart-rolling { fill: none; stroke: var(--n-calories); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; }
+.chart-point { fill: #8a8ca0; }
 .chart-guide { fill: none; stroke-width: 1.5; stroke-dasharray: 3 2; }
-.chart-guide-raw { stroke: #7a9486; }
-.chart-guide-rolling { stroke: var(--forest); }
+.chart-guide-raw { stroke: #8a8ca0; }
+.chart-guide-rolling { stroke: var(--n-calories); }
 .chart-direct-label { fill: var(--ink); font-size: 13px; font-weight: 800; }
 .chart-tick { fill: var(--ink-soft); font-size: 12px; }
 .trend-figure figcaption { color: var(--ink-soft); font-size: .85rem; line-height: 1.5; }
@@ -283,7 +295,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 }
 .coverage-item span { overflow-wrap: anywhere; font-size: .78rem; }
 .coverage-item strong { color: var(--lime); font-size: .8rem; }
-.coverage-item small { color: #d7e3dd; }
+.coverage-item small { color: #d9dae3; }
 .coverage-item.state-attention strong, .coverage-item.state-high strong { color: #ffd7bc; }
 
 .coverage-state { display: inline-block; margin-bottom: 7px; color: var(--forest-soft); font-size: .76rem; font-weight: 850; }
@@ -297,9 +309,9 @@ h1[tabindex="-1"]:focus { outline: none; }
   background: var(--surface);
   color: var(--ink);
   padding: 18px;
-  box-shadow: 0 24px 70px rgb(23 56 45 / 28%);
+  box-shadow: 0 24px 70px rgb(22 22 40 / 28%);
 }
-.nutrient-dialog::backdrop, .meal-dialog::backdrop { background: rgb(25 53 45 / 38%); }
+.nutrient-dialog::backdrop, .meal-dialog::backdrop { background: rgb(22 22 40 / 40%); }
 .dialog-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .dialog-heading h2 { margin-bottom: 14px; font-size: 1.35rem; }
 .nutrient-dialog h3, .meal-dialog h3 { margin: 18px 0 8px; font-size: .95rem; }
@@ -342,9 +354,9 @@ h1[tabindex="-1"]:focus { outline: none; }
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   border-top: 1px solid var(--line);
-  background: rgb(255 254 250 / 94%);
+  background: rgb(22 22 29 / 96%);
   padding: 7px 6px max(7px, env(safe-area-inset-bottom));
-  box-shadow: 0 -10px 28px rgb(23 56 45 / 8%);
+  box-shadow: 0 -10px 28px rgb(22 22 40 / 14%);
   backdrop-filter: blur(18px);
 }
 
@@ -357,13 +369,13 @@ h1[tabindex="-1"]:focus { outline: none; }
   border: 0;
   border-radius: 12px;
   background: transparent;
-  color: var(--ink-soft);
+  color: #a9abb8;
   padding: 4px 2px;
   font-size: .68rem;
   font-weight: 750;
 }
 
-.nav-item.is-active { background: var(--surface-alt); color: var(--forest); }
+.nav-item.is-active { background: #fff; color: var(--ink); }
 .nav-icon { font-size: 1.1rem; line-height: 1; }
 .nav-item > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
@@ -486,3 +498,73 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .meal-toggle .flag { font-style: normal; font-weight: 700; }
 .meal-card .plain-list li { flex-wrap: wrap; }
 .meal-card .plain-list li > span:first-child { flex: 1 1 180px; }
+
+/* Nutrient colors on Today (her pick, 2026-10-01). Calories is the solid hero, protein and water are tiles,
+   and each problem is a tile in its nutrient's color. Color names the nutrient, not the verdict: the status
+   always sits in a white pill with its symbol and word, colored by level. Rows in the on-track list stay
+   white with the nutrient color in the bar. */
+.metric-bar { --n: var(--forest-soft); }
+.nutrient-calories { --n: var(--n-calories); }
+.nutrient-protein { --n: var(--n-protein); }
+.nutrient-water { --n: var(--n-water); }
+.nutrient-carbs { --n: var(--n-carbs); }
+.nutrient-gl { --n: var(--n-gl); }
+.nutrient-fat { --n: var(--n-fat); }
+.nutrient-saturatedFat { --n: var(--n-saturatedFat); }
+.nutrient-transFat { --n: var(--n-transFat); }
+.nutrient-fiber { --n: var(--n-fiber); }
+.nutrient-solubleFiber { --n: var(--n-solubleFiber); }
+.nutrient-sodium { --n: var(--n-sodium); }
+.nutrient-freeSugar { --n: var(--n-freeSugar); }
+
+.today-page h2 { font-size: 1.2rem; font-weight: 850; letter-spacing: -.02em; }
+.today-goals, .today-problems { gap: 10px; }
+.bar-hint { margin: 0; font-size: .84rem; }
+.metric-bar { border-color: transparent; box-shadow: var(--shadow); }
+.metric-bar:not(.metric-tile):not(.metric-hero) .bar-fill { background: var(--n); }
+
+.metric-tile, .metric-hero, .metric-tile.level-close, .metric-tile.level-behind, .metric-hero.level-close, .metric-hero.level-behind {
+  border: 0; border-radius: 20px; background: var(--n); color: #fff; box-shadow: none;
+}
+:is(.metric-tile, .metric-hero) .metric-bar-button { color: #fff; border-radius: 20px; }
+:is(.metric-tile, .metric-hero) .metric-bar-button:focus-visible { outline-color: var(--ink); }
+:is(.metric-tile, .metric-hero) .metric-bar-head { font-size: 1rem; }
+:is(.metric-tile, .metric-hero) .metric-bar-head span { font-variant-numeric: tabular-nums; font-weight: 850; }
+:is(.metric-tile, .metric-hero) .metric-bar-foot small, :is(.metric-tile, .metric-hero) .muted { color: rgb(255 255 255 / 88%); }
+:is(.metric-tile, .metric-hero) .bar-track { background: rgb(255 255 255 / 28%); }
+:is(.metric-tile, .metric-hero) .bar-fill { background: #fff; }
+:is(.metric-tile, .metric-hero) .bar-zone { background: rgb(255 255 255 / 30%); }
+:is(.metric-tile, .metric-hero) .bar-tick { background: rgb(0 0 0 / 62%); }
+:is(.metric-tile, .metric-hero) .bar-ideal { background: repeating-linear-gradient(rgb(0 0 0 / 62%) 0 3px, transparent 3px 5px); }
+:is(.metric-tile, .metric-hero) .flag { border-radius: 999px; background: #fff; padding: 3px 9px; color: var(--ink); }
+:is(.metric-tile, .metric-hero).level-good .flag { color: var(--good-ink); }
+:is(.metric-tile, .metric-hero).level-close .flag { color: var(--close-ink); }
+:is(.metric-tile, .metric-hero).level-behind .flag { color: var(--behind-ink); }
+:is(.metric-tile, .metric-hero).level-unknown .flag { color: var(--ink-soft); }
+:is(.metric-tile, .metric-hero) .metric-detail { border-top-color: rgb(255 255 255 / 30%); }
+:is(.metric-tile, .metric-hero) .part-list li, :is(.metric-tile, .metric-hero) .detail-list small { color: rgb(255 255 255 / 85%); }
+:is(.metric-tile, .metric-hero) .metric-split { color: rgb(255 255 255 / 88%); font-size: .84rem; }
+:is(.metric-tile, .metric-hero) .estimate-tag { background: rgb(255 255 255 / 22%); color: #fff; }
+
+.metric-hero .metric-bar-button { gap: 10px; padding: 16px 16px 18px; }
+.metric-hero .metric-bar-head { display: grid; gap: 2px; }
+.metric-hero .metric-bar-head strong { font-size: .95rem; opacity: .92; }
+.metric-hero .metric-bar-head span { font-size: clamp(1.7rem, 8.5vw, 2.4rem); line-height: 1.05; letter-spacing: -.03em; }
+.metric-hero .bar-track { height: 14px; border-radius: 7px; }
+
+.tile-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tile-pair .metric-tile:only-child, .tile-pair .metric-tile:has([aria-expanded="true"]) { grid-column: 1 / -1; }
+.tile-pair .metric-bar-head { display: grid; gap: 2px; }
+.tile-pair .metric-bar-head span { font-size: 1.15rem; line-height: 1.15; }
+.tile-pair .metric-bar-foot { display: grid; justify-items: start; gap: 6px; }
+.tile-pair .metric-bar-button { padding: 12px; }
+
+.water-actions .secondary-button { border-color: var(--n-water); color: var(--n-water); }
+.today-problems .metric-list { gap: 10px; }
+.on-track-toggle { border: 0; background: var(--surface); box-shadow: var(--shadow); }
+.on-track-toggle span:first-child { flex: 1 1 auto; }
+.on-track-dots { display: flex; flex: 0 1 auto; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 80px; }
+.on-track-dots:empty { display: none; }
+.on-track-dots i { display: block; width: 9px; height: 9px; border-radius: 50%; background: var(--n); }
+.meal-summary { background: var(--surface); }
+.add-action { border-radius: 16px; }

@@ -339,7 +339,13 @@ function metricTarget(metric, units) {
   return Number.isFinite(ideal) ? `${amount(ideal)} ideal · ${amount(max)} limit` : `${amount(max)} limit`;
 }
 
-function renderMetricBar(metric, { expanded = false, units = 'metric' } = {}) {
+// Each nutrient keeps one color everywhere (her pick, 2026-10-01, the "nutrient colors" design); a meal's carb or GL problem uses that nutrient's color.
+function nutrientKey(id) {
+  const meal = /^meal-.+-(carbs|gl)$/.exec(id);
+  return meal ? meal[1] : id;
+}
+
+function renderMetricBar(metric, { expanded = false, units = 'metric', variant = '' } = {}) {
   const id = escapeHtml(metric.id);
   const bar = metric.bar ?? {};
   const pct = value => `${format(Math.max(0, Math.min(100, value)), 1)}%`;
@@ -352,7 +358,7 @@ function renderMetricBar(metric, { expanded = false, units = 'metric' } = {}) {
       ${contributors.length ? `<h3>Where it came from</h3><ul class="contributor-list">${contributors.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong>${item.estimate ? ' <small class="estimate-tag">estimate</small>' : ''}</span><span>${escapeHtml(metricAmount(item.amount, metric.unit, units))}${metric.contributors.length > 1 ? ` · ${escapeHtml(format(item.share * 100))}%` : ''}</span>${item.parts.length ? `<ul class="part-list">${item.parts.slice(0, 5).map(part => `<li><span>${escapeHtml(part.name)}</span><span>${escapeHtml(metricAmount(part.amount, metric.unit, units))}</span></li>`).join('')}</ul>` : ''}</li>`).join('')}</ul>` : ''}
       ${metric.unknownCount ? `<p class="muted">${escapeHtml(plural(metric.unknownCount, 'food'))} ${metric.unknownCount === 1 ? 'does' : 'do'} not report this, so the total may be higher.</p>` : ''}
     </div>` : '';
-  return `<article class="metric-bar level-${escapeHtml(metric.level)}">
+  return `<article class="metric-bar level-${escapeHtml(metric.level)} nutrient-${escapeHtml(nutrientKey(metric.id))}${variant ? ` metric-${variant}` : ''}">
     <button class="metric-bar-button" type="button" data-action="toggle-metric" data-metric-id="${id}" aria-expanded="${expanded}" aria-controls="metric-${id}">
       <span class="metric-bar-head"><strong>${escapeHtml(metric.label)}</strong><span>${escapeHtml(valueText)}</span></span>
       <span class="bar-track" aria-hidden="true">${Number.isFinite(bar.zoneStart) ? `<span class="bar-zone" style="left:${pct(bar.zoneStart)};width:${pct(bar.zoneEnd - bar.zoneStart)}"></span>` : ''}<span class="bar-fill" style="width:${pct(bar.fill ?? 0)}"></span>${Number.isFinite(bar.idealTick) ? `<span class="bar-tick bar-ideal" style="left:${pct(bar.idealTick)}"></span>` : ''}${Number.isFinite(bar.tick) ? `<span class="bar-tick" style="left:${pct(bar.tick)}"></span>` : ''}</span>
@@ -390,7 +396,8 @@ function renderToday(data, state, ui = {}) {
     ? `<button class="quiet-button" type="button" data-action="toggle-training" aria-pressed="${trainingDay}">${trainingDay ? 'Training day' : 'Rest day'}</button>`
     : '';
   const { pinned, problems, onTrack, water } = todayMetrics(daily, { dayProgress: ui.dayProgress ?? 1 });
-  const bar = metric => renderMetricBar(metric, { expanded: state.expandedMetric === metric.id, units });
+  const bar = (metric, variant = '') => renderMetricBar(metric, { expanded: state.expandedMetric === metric.id, units, variant });
+  const [calories, ...otherPinned] = pinned;
   const scheduled = data.library.some(item => isSupplementScheduled(item, selectedDate))
     || (data.dayState[selectedDate]?.supplementsCompleted ?? []).length > 0;
   const onTrackCount = onTrack.filter(metric => metric.level === 'good').length;
@@ -399,15 +406,16 @@ function renderToday(data, state, ui = {}) {
     <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div>${trainingControl}</div>
     ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${Number.isFinite(workout.minutes) ? ` · ${escapeHtml(workout.minutes)} min` : ''}`).join('; ')}</p>` : ''}
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
-    <section class="card stack" aria-labelledby="goals-heading"><h2 id="goals-heading" class="sr-only">Calories and protein</h2>
-      <p class="muted">The line marks your target. Tap a bar to see what it means and which foods it came from.</p>
-      <div class="metric-list">${pinned.map(bar).join('')}</div></section>
-    <section class="card stack" aria-labelledby="problems-heading"><h2 id="problems-heading">${problems.length ? 'Needs a look' : 'Nothing else is off target'}</h2>
-      ${problems.length ? `<div class="metric-list">${problems.map(bar).join('')}</div>` : ''}
-      <button class="on-track-toggle" type="button" data-action="toggle-on-track" aria-expanded="${state.onTrackOpen ? 'true' : 'false'}" aria-controls="on-track-list"><span>✓ ${escapeHtml(format(onTrackCount))} on track${unknownCount ? ` · ? ${escapeHtml(format(unknownCount))} unknown` : ''}</span><strong>${state.onTrackOpen ? 'Hide' : 'Show'}</strong></button>
-      ${state.onTrackOpen ? `<div id="on-track-list" class="metric-list">${onTrack.map(bar).join('')}</div>` : ''}
+    <section class="stack today-goals" aria-labelledby="goals-heading"><h2 id="goals-heading" class="sr-only">Calories, protein, and water</h2>
+      ${calories ? bar(calories, 'hero') : ''}
+      <div class="tile-pair">${otherPinned.map(metric => bar(metric, 'tile')).join('')}${water ? bar(water, 'tile') : ''}</div>
+      ${water ? `<div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div>` : ''}
+      <p class="muted bar-hint">The line marks your target. Tap a bar to see what it means and which foods it came from.</p></section>
+    <section class="stack today-problems" aria-labelledby="problems-heading"><h2 id="problems-heading">${problems.length ? 'Needs a look' : 'Nothing else is off target'}</h2>
+      ${problems.length ? `<div class="metric-list">${problems.map(metric => bar(metric, 'tile')).join('')}</div>` : ''}
+      <button class="on-track-toggle" type="button" data-action="toggle-on-track" aria-expanded="${state.onTrackOpen ? 'true' : 'false'}" aria-controls="on-track-list"><span>✓ ${escapeHtml(format(onTrackCount))} on track${unknownCount ? ` · ? ${escapeHtml(format(unknownCount))} unknown` : ''}</span><span class="on-track-dots" aria-hidden="true">${onTrack.filter(metric => metric.level === 'good').map(metric => `<i class="nutrient-${escapeHtml(nutrientKey(metric.id))}"></i>`).join('')}</span><strong>${state.onTrackOpen ? 'Hide' : 'Show'}</strong></button>
+      ${state.onTrackOpen ? `<div id="on-track-list" class="metric-list">${onTrack.map(metric => bar(metric)).join('')}</div>` : ''}
     </section>
-    ${water ? `<section class="card stack" aria-labelledby="water-heading"><h2 id="water-heading" class="sr-only">Water</h2>${bar(water)}<div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div></section>` : ''}
     <section class="card stack" aria-labelledby="today-log"><h2 id="today-log">Meals</h2>${renderMealGroups(daily.meals, data, selectedDate, state.openMeals ?? [])}
       <button class="primary-button full-width add-action" type="button" data-action="navigate" data-route="add">Add food or supplement</button></section>
     ${scheduled ? `<section class="card stack" aria-labelledby="today-supplements"><h2 id="today-supplements">Supplements</h2>${renderSupplementSchedule(data, selectedDate)}</section>` : ''}
