@@ -1,6 +1,7 @@
 import { CARDIOMETABOLIC_TARGET_DEFAULTS, NUTRIENTS } from './constants.js';
 import { cardiometabolicDay } from './cardiometabolic.js';
 import { calculateMealMetrics, groupMealEntries } from './meals.js';
+import { entryFluidMl } from './fluids.js';
 
 const DEFICIT_BY_PACE = Object.freeze({ gentle: 0.1, moderate: 0.175, faster: 0.25 });
 const round25 = value => Math.round(value / 25) * 25;
@@ -345,6 +346,10 @@ export function dailySummary(date, stores) {
   const effectiveTargets = resolveEffectiveTargets(data.targets);
   const targets = effectiveTargets ? computeDayTargets(data.targets, trainingDay) : null;
   const items = summaryItems(data, date);
+  // Drinks logged as food also count toward water (see fluids.js).
+  const drinks = (data.log?.[date] ?? [])
+    .map(entry => ({ id: entry.id, name: entry.name ?? 'Logged item', amount: entryFluidMl(entry) * (Number.isFinite(entry.servings) ? entry.servings : 1) }))
+    .filter(drink => drink.amount > 0).sort((left, right) => right.amount - left.amount);
   const nutrients = sumNutrients(items);
   nutrients.micros ??= {};
   const details = Object.fromEntries(NUTRIENTS.map(definition => [
@@ -373,6 +378,8 @@ export function dailySummary(date, stores) {
     targets,
     nutrients,
     waterMl: data.water?.[date] ?? 0,
+    drinkWaterMl: drinks.reduce((sum, drink) => sum + drink.amount, 0),
+    drinks,
     calories: { knownTotal: calories, complete: caloriesComplete, unknownItems: calorieUnknownItems },
     remainingCalories: caloriesComplete && Number.isFinite(targets?.calories)
       ? targets.calories - calories

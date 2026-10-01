@@ -24,6 +24,7 @@ import {
 import { progressSummary, rollingWeightSeries } from './trends.js';
 import { todayMetrics } from './today-metrics.js';
 import { analysisProvider } from './services/anthropic.js';
+import { drinkFluidMl } from './fluids.js';
 
 const DISCLAIMER = 'This app estimates nutrition and is not medical or dietetic advice. Targets are general references you can edit. Consult a qualified professional for personal medical or nutrition guidance.';
 
@@ -355,7 +356,7 @@ function renderMetricBar(metric, { expanded = false, units = 'metric' } = {}) {
     <button class="metric-bar-button" type="button" data-action="toggle-metric" data-metric-id="${id}" aria-expanded="${expanded}" aria-controls="metric-${id}">
       <span class="metric-bar-head"><strong>${escapeHtml(metric.label)}</strong><span>${escapeHtml(valueText)}</span></span>
       <span class="bar-track" aria-hidden="true">${Number.isFinite(bar.zoneStart) ? `<span class="bar-zone" style="left:${pct(bar.zoneStart)};width:${pct(bar.zoneEnd - bar.zoneStart)}"></span>` : ''}<span class="bar-fill" style="width:${pct(bar.fill ?? 0)}"></span>${Number.isFinite(bar.idealTick) ? `<span class="bar-tick bar-ideal" style="left:${pct(bar.idealTick)}"></span>` : ''}${Number.isFinite(bar.tick) ? `<span class="bar-tick" style="left:${pct(bar.tick)}"></span>` : ''}</span>
-      <span class="metric-bar-foot"><em class="flag">${escapeHtml(`${metric.symbol} ${metric.statusLabel}`)}</em><small>${escapeHtml(metricTarget(metric, units))}</small></span>
+      <span class="metric-bar-foot"><em class="flag">${escapeHtml(`${metric.symbol} ${metric.statusLabel}`)}</em><small>${escapeHtml(metricTarget(metric, units))}</small></span>${metric.split ? `<small class="metric-split">${escapeHtml(`${metricAmount(metric.split.buttons, metric.unit, units)} water + ${metricAmount(metric.split.drinks, metric.unit, units)} from drinks`)}</small>` : ''}
     </button>${detail}
   </article>`;
 }
@@ -484,6 +485,14 @@ function renderAdd({ data, state }) {
 
 // The main numbers as plain boxes, always visible on the review. Their sources are under "Vitamins, minerals,
 // and sources"; a changed number becomes her own entry.
+// How much of a drink counts toward water, per serving: its own amount, or the drink rule on its analysis.
+function fluidField(item, units) {
+  const ml = Number.isFinite(item.fluidMl) ? item.fluidMl : drinkFluidMl(item.analysis?.estimate);
+  const imperial = units === 'imperial';
+  const shown = Number.isFinite(ml) && ml > 0 ? (imperial ? format(mlToFlOz(ml), 1) : String(Math.round(ml))) : '';
+  return `<label class="macro-box">Counts as water (${imperial ? 'fl oz' : 'ml'})<input name="fluidAmount" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(shown.replace(/,/g, ''))}" placeholder="Not a drink" aria-describedby="fluid-help"><small id="fluid-help">For drinks like soy milk or coffee, per serving. Leave blank for food.</small></label>`;
+}
+
 function macroBox(definition, item) {
   const value = nutrientValue(item.perServing ?? {}, definition);
   return `<label class="macro-box">${escapeHtml(definition.label)} (${escapeHtml(definition.unit)})<input name="nutrient_${escapeHtml(definition.key)}" type="number" min="0" step="any" inputmode="decimal" value="${escapeHtml(Number.isFinite(value) ? editableNumber(value) : '')}" placeholder="Unknown"></label>`;
@@ -679,6 +688,7 @@ function renderConfirmation({ data, state, ui = {} }) {
         ${hasKnownNutrition(item) || draft.mode === 'manual' ? '' : '<p class="form-status is-error" role="alert">This item has no nutrition yet. Enter its label values below, or analyze a photo of its label, before adding it.</p>'}
         ${draft.analysisReview?.usdaProblems?.length ? `<p class="form-status is-error" role="alert">USDA could not be reached for ${escapeHtml(draft.analysisReview.usdaProblems.map(item => item.name).join(', '))} (${escapeHtml(draft.analysisReview.usdaProblems[0].error)}), so their vitamins and minerals are AI estimates. A free USDA key in Settings avoids this, or analyze a photo of the label.</p>` : ''}
         <section class="stack" aria-labelledby="nutrition-facts-title"><h2 id="nutrition-facts-title">Nutrition facts per serving</h2><p class="muted">Change any number that looks wrong. A number you change is saved as your own entry.</p><div class="macro-grid">${MACRO_NUTRIENTS.map(definition => macroBox(definition, item)).join('')}</div></section>
+        ${item.type === 'supplement' ? '' : fluidField(item, data.settings.units)}
         <p class="review-totals"><strong>Per serving:</strong> <span data-review-totals>${escapeHtml(macroLine(item.perServing))}</span></p>
         ${sourceNote(item) ? `<p class="muted">${escapeHtml(sourceNote(item))}</p>` : ''}
         ${partialNote(item) ? `<p class="muted">${escapeHtml(partialNote(item))}</p>` : ''}

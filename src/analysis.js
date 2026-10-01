@@ -193,8 +193,11 @@ function dropPlainWater(parsed) {
     const labelled = parsed.components[parsed.labelComponentIndex];
     parsed.labelComponentIndex = labelled && kept.includes(labelled) ? kept.indexOf(labelled) : undefined;
   }
+  // Remembered so a drink made with water still counts toward the day's water (fluids.js).
+  const waterG = parsed.components.filter(isWater).reduce((sum, component) => sum + (Number.isFinite(component.estimatedGrams) ? component.estimatedGrams : 0), 0);
+  if (waterG > 0) parsed.plainWaterG = waterG;
   parsed.components = kept;
-  parsed.assumptions = [...parsed.assumptions, 'Plain water is not counted; it adds no calories or tracked nutrients.'];
+  parsed.assumptions = [...parsed.assumptions, 'Plain water adds no calories or tracked nutrients; it still counts toward water when this is a drink.'];
 }
 
 // Nutrition numbers the person typed override every other source for that nutrient, per serving.
@@ -365,5 +368,6 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     ingredientsText: parsed.ingredientsText ?? ''
   });
   const draft = applyStatedNutrients(resolved, { ...parsed.statedNutrients, ...typed });
+  if (parsed.plainWaterG) draft.plainWaterG = parsed.plainWaterG;
   return { status: 'estimate', draft: labelReader ? { ...draft, labelReader } : draft };
 }

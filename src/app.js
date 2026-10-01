@@ -26,6 +26,7 @@ import { extractIngredients } from './nutrition-label.js';
 import { deriveSugarBreakdown, FOOD_CLASSIFICATIONS } from './sugar.js';
 import { buildItemGlycemic, scaleGlycemic } from './glycemic.js';
 import { MEAL_TYPES, suggestMealIdentity } from './meals.js';
+import { drinkFluidMl } from './fluids.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
@@ -265,7 +266,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
             usdaSearch: component.usdaSearch, ...(component.fallbackNutrients ? { fallbackNutrients: clone(component.fallbackNutrients) } : {}),
             matched: matched ? { fdcId: matched.fdcId, description: matched.description } : null };
         }),
-        perServing: clone(result.perServing)
+        perServing: clone(result.perServing),
+        ...(result.plainWaterG ? { plainWaterG: result.plainWaterG } : {})
       }
     };
   }
@@ -325,6 +327,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       analysis: analysisRecord(result, input),
       ...sugarFields(result)
     };
+    const fluidMl = item.type === 'supplement' ? null : drinkFluidMl(item.analysis.estimate);
+    if (Number.isFinite(fluidMl)) item.fluidMl = fluidMl;
     state.draft = { kind: 'confirmation', mode: 'analysis', servings: 1, item, analysisReview: {
       totalServings: result.totalServings,
       recipeTotal: result.recipeTotal,
@@ -680,7 +684,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       components: clone(canonical.components ?? []),
       ...sugarFields(canonical),
       ...(canonical.glycemic ? { glycemic: scaleGlycemic(canonical.glycemic, servings), glycemicPerServing: clone(canonical.glycemic) } : {}),
-      ...(canonical.analysis ? { analysis: clone(canonical.analysis) } : {})
+      ...(canonical.analysis ? { analysis: clone(canonical.analysis) } : {}),
+      ...(Number.isFinite(canonical.fluidMl) ? { fluidMl: canonical.fluidMl } : {})
     };
   }
 
@@ -782,7 +787,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       perServing: clone(entry.perServing ?? {}), provenance: clone(entry.provenance ?? {}), confidence: entry.confidence ?? null,
       assumptions: clone(entry.assumptions ?? []), components: clone(entry.components ?? []), favorite: true, verified: false,
       ...sugarFields({ ...entry, glycemic: entry.glycemicPerServing }),
-      ...(entry.analysis ? { analysis: clone(entry.analysis) } : {}) };
+      ...(entry.analysis ? { analysis: clone(entry.analysis) } : {}),
+      ...(Number.isFinite(entry.fluidMl) ? { fluidMl: entry.fluidMl } : {}) };
     saveLibraryItem(item);
     updateDatedMap('log', date, entries => (entries ?? []).map(candidate => candidate.id === entryId ? { ...candidate, itemId: item.id } : candidate));
   }
@@ -933,6 +939,14 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       glycemic = buildItemGlycemic({ perServing: flatPerServing, manualGi: glycemic.manualGi });
     }
 
+    // How much of a drink counts toward water, per serving; blank leaves it out.
+    const fluidRaw = formData.get('fluidAmount');
+    let fluidMl = Number.isFinite(draftItem.fluidMl) ? draftItem.fluidMl : null;
+    if (fluidRaw !== null) {
+      const entered = String(fluidRaw).trim() === '' ? 0 : finiteNonNegative(fluidRaw, 'Counts as water');
+      fluidMl = Math.round(store.get('settings').units === 'imperial' ? flOzToMl(entered) : entered);
+    }
+
     const itemId = String(formData.get('itemId') ?? '').trim();
     const knownProvenance = Object.values(provenance);
     const commonConfidence = knownProvenance.length
@@ -952,7 +966,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       favorite: formData.has('favorite'),
       verified: knownProvenance.length > 0 && knownProvenance.every(record => record.source === 'label'),
       ...sugarFields({ classification, ingredientsText, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.issues, glycemic }),
-      ...(state.draft?.item?.analysis ? { analysis: clone(state.draft.item.analysis) } : {})
+      ...(state.draft?.item?.analysis ? { analysis: clone(state.draft.item.analysis) } : {}),
+      ...(type !== 'supplement' && Number.isFinite(fluidMl) ? { fluidMl } : {})
     };
     if (type === 'supplement') {
       const frequency = ['daily', 'weekly', 'custom'].includes(formData.get('scheduleFrequency'))
@@ -992,7 +1007,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         assumptions: clone(entry.assumptions ?? []),
         components: clone(entry.components ?? []),
         ...sugarFields({ ...entry, glycemic: entry.glycemicPerServing }),
-        ...(entry.analysis ? { analysis: clone(entry.analysis) } : {})
+        ...(entry.analysis ? { analysis: clone(entry.analysis) } : {}),
+        ...(Number.isFinite(entry.fluidMl) ? { fluidMl: entry.fluidMl } : {})
       },
       meal: { mealId: entry.mealId ?? null, mealType: entry.mealType ?? null }
     };

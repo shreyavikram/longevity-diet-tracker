@@ -35,7 +35,7 @@ const COPY = {
     note: () => 'Avoid it entirely.' },
   gl: { label: 'Glycemic load', unit: 'GL', meaning: 'An estimate of how much the day\'s food raises blood sugar, from each food\'s GI and net carbs. It is not a prediction of your own response.',
     note: t => `${number(t.dailyGlMax)} or less a day. Per meal ${number(t.mealGlMax)} or less, 15 or less is ideal.` },
-  water: { label: 'Water', unit: 'ml', meaning: 'Supports training, digestion, and appetite control.',
+  water: { label: 'Water', unit: 'ml', meaning: 'Supports training, digestion, and appetite control. Drinks you log, like soy milk or coffee, count too.',
     note: () => 'About 35 ml per kg of body weight, 500 ml more on training days.' }
 };
 const ORDER = ['calories', 'protein', 'fiber', 'solubleFiber', 'carbs', 'fat', 'sodium', 'saturatedFat', 'freeSugar', 'transFat', 'gl'];
@@ -260,8 +260,13 @@ export function todayMetrics(daily, { dayProgress = 1 } = {}) {
     .sort((left, right) => LEVEL_RANK[left.level] - LEVEL_RANK[right.level] || severity(right) - severity(left));
   const onTrack = rest.filter(entry => !(entry.level in LEVEL_RANK)).sort(byOrder);
 
-  const waterMl = daily.waterMl ?? 0;
-  const water = metric('water', 'minimum', waterMl, { min: t.waterMl }, { unknownCount: 0, contributors: [] },
-    minimumStatus(waterMl, t.waterMl, dayProgress), geometry(waterMl, t.waterMl), t);
+  // Water is what she tapped in plus the drinks she logged.
+  const buttons = daily.waterMl ?? 0;
+  const drinks = daily.drinkWaterMl ?? 0;
+  const waterMl = buttons + drinks;
+  const sources = [...(buttons > 0 ? [{ name: 'Water you added', amount: buttons }] : []), ...(daily.drinks ?? [])]
+    .map(source => ({ name: source.name, amount: source.amount, share: waterMl > 0 ? source.amount / waterMl : 0, estimate: false, parts: [] }));
+  const water = metric('water', 'minimum', waterMl, { min: t.waterMl }, { unknownCount: 0, contributors: drinks > 0 ? sources : [] },
+    minimumStatus(waterMl, t.waterMl, dayProgress), geometry(waterMl, t.waterMl), t, drinks > 0 ? { split: { buttons, drinks } } : {});
   return { pinned, problems, onTrack, water };
 }

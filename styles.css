@@ -453,6 +453,7 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .metric-bar-head span { font-weight: 700; }
 .metric-bar-foot small { color: var(--ink-soft); }
 .metric-bar-foot .flag { font-style: normal; font-weight: 800; font-size: .84rem; }
+.metric-split { display: block; color: var(--ink-soft); }
 .bar-track { position: relative; display: block; height: 12px; border-radius: 6px; background: var(--surface-alt); overflow: hidden; }
 .bar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: var(--forest-soft); }
 .bar-zone { position: absolute; top: 0; bottom: 0; background: rgb(29 94 56 / 18%); }
