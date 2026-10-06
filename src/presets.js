@@ -4,6 +4,7 @@
 // bottles it is Huel's formula page figure. Silk prints no selenium, zinc, or choline, so those stay unknown.
 import { NUTRIENTS } from './constants.js';
 import { deriveSugarBreakdown } from './sugar.js';
+import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
 
 const RETRIEVED = '2026-10-05';
 const SOURCES = Object.freeze({
@@ -72,6 +73,30 @@ const GROUPS = Object.freeze([
     classification: () => 'composite' }
 ]);
 
+// GI (her request, 2026-10-05). Huel's lab results (Oxford Brookes, listed at HUEL_GI_URL) are used where that product
+// was tested; every other Huel product gets her chosen estimate, carried over from the tested products most like it
+// (the same base: rice, wheat pasta or noodles, or the shake formula), with the tested range as its range. GL is then
+// GI times each product's own available carbs, so it is never copied from another product. Silk uses the soy milk
+// entry in the International GI Tables.
+const HUEL_GI_URL = 'https://huel.com/pages/what-is-glycemic-index-and-load';
+const tested = (value, what, confidence = 'high') => ({ value, range: { min: value, max: value }, sourceType: 'manufacturer-test',
+  sourceName: 'Huel GI testing (Oxford Brookes)', sourceUrl: HUEL_GI_URL, referenceName: what, preparation: 'lab tested', confidence });
+const estimated = (value, min, max, what) => ({ value, range: { min, max }, sourceType: 'estimate',
+  sourceName: 'Estimate from Huel GI tests', sourceUrl: HUEL_GI_URL, referenceName: what, preparation: 'estimated', confidence: 'low' });
+const RICE = ['Thai Green Curry', 'Mexican Chili', 'Yellow Coconut Curry', 'Spicy Indian Curry'];
+const PASTA = ['Mac & Cheeze', 'Cajun Pasta', "Chick'n & Mushroom Pasta", 'Pasta Bolognese'];
+function giEvidence(groupId, name) {
+  if (groupId === 'silk') return matchGiEvidence({ name: 'soy milk', preparation: 'drink' });
+  if (groupId === 'powder') return tested(19, 'Huel Black Edition powder, tested 2020 (flavor not stated)', 'medium');
+  if (groupId === 'rtd') return estimated(25, 19, 30, 'Huel Black Edition powder (19) and Huel Ready-to-drink (25, 30)');
+  if (name === 'Thai Green Curry') return tested(19, 'Huel Hot & Savory Thai Green Curry, tested 2021');
+  if (name === 'Mexican Chili') return tested(31, 'Huel Hot & Savory Mexican Chili, tested 2021');
+  if (name === 'Mac & Cheeze') return tested(34, 'Huel Hot & Savory Mac & Cheeze, tested 2021');
+  if (RICE.includes(name)) return estimated(25, 19, 31, 'Huel rice meals Thai Green Curry (19) and Mexican Chili (31)');
+  if (PASTA.includes(name)) return estimated(29, 23, 34, 'Huel pasta meals Mac & Cheeze (34) and Tomato & Herb (23)');
+  return estimated(29, 19, 34, 'Huel wheat pasta meals (23, 34); no noodle meal was tested');
+}
+
 const slug = text => text.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 const GROUP_OF = Object.fromEntries(NUTRIENTS.map(definition => [definition.key, definition.group]));
 
@@ -105,6 +130,8 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
     perServing,
     provenance: sugar.provenance,
     classification,
+    glycemic: buildItemGlycemic({ components: [{ name: group.name(rawName), nutrients: { carbsG: flat.carbsG, fiberG: flat.fiberG },
+      gi: giEvidence(group.id, rawName) }], perServing: flat }),
     confidence: 'high',
     assumptions,
     components: [],
