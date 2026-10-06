@@ -33,6 +33,7 @@ import { setupPwa } from './pwa.js';
 import { mergeActivity, parseActivity } from './activity.js';
 import { createCloudSync } from './cloud.js';
 import { createLocalFoodSearch } from './services/usda-local.js';
+import { findPreset } from './presets.js';
 
 const VALID_ROUTES = new Set(['today', 'add', 'library', 'progress', 'settings']);
 const HUEL_SEEDS = Object.freeze([
@@ -1116,7 +1117,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   function dispatch(action) {
     if (!action || typeof action.type !== 'string') throw new TypeError('Actions require a type');
-    if (['OPEN_MANUAL_ENTRY', 'OPEN_LIBRARY_ITEM', 'OPEN_LOG_ENTRY', 'RESET_DATA'].includes(action.type)
+    if (['OPEN_MANUAL_ENTRY', 'OPEN_LIBRARY_ITEM', 'OPEN_PRESET', 'OPEN_LOG_ENTRY', 'RESET_DATA'].includes(action.type)
       && (analysisController || state.analysis)) cancelAnalysis();
     switch (action.type) {
       case 'APPLY_UPDATE':
@@ -1226,6 +1227,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'OPEN_LIBRARY_ITEM':
         openLibraryItem(action.itemId);
         break;
+      case 'OPEN_PRESET': {
+        const preset = findPreset(action.presetId);
+        if (!preset) throw new Error('Choose a product from the list');
+        state.draft = { kind: 'confirmation', mode: 'preset', item: preset, servings: 1 };
+        break;
+      }
       case 'OPEN_LOG_ENTRY':
         openLogEntry(action.entryId);
         break;
@@ -1656,6 +1663,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           model: formData.get('model')
         });
         break;
+      case 'open-preset':
+        dispatch({ type: 'OPEN_PRESET', presetId: String(formData.get('presetId') ?? '') });
+        break;
       case 'search-library':
         dispatch({ type: 'SET_LIBRARY_QUERY', query: formData.get('query') });
         break;
@@ -1795,9 +1805,37 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     updateDatedMap('log', fill.date, list => list.map(candidate => candidate.id === entry.id ? entry : candidate));
   }
 
+  // A "correct" from the inbox replaces a past log entry's nutrition with checked values (her request, 2026-10-05,
+  // after AI estimates of Huel and Silk products proved wrong). The entry keeps its id, day, meal, and when it was
+  // logged; its original analysis stays so the estimate can still be compared. GL evidence is replaced too, since
+  // it was computed from the old carbs.
+  // The item travels as "replacement", not "item": an older app reading the file then rejects it and leaves it in
+  // the inbox, instead of mistaking it for an addition and deleting it.
+  function correctLogEntry(correction) {
+    assertDate(correction.date);
+    const item = correction.replacement;
+    if (!item || typeof item.name !== 'string' || !item.name.trim() || !LIBRARY_ITEM_TYPES.some(type => type.id === item.type)
+      || item.type === 'supplement') {
+      throw new TypeError('Inbox correction is invalid');
+    }
+    const entries = store.get('log')[correction.date] ?? [];
+    const target = entries.find(candidate => candidate.id === correction.entryId);
+    if (!target) throw new Error('Log entry to correct was not found');
+    const servings = finiteNonNegative(correction.servings ?? target.servings, 'Servings');
+    if (servings === 0) throw new RangeError('Servings must be greater than zero');
+    const { glycemic, glycemicPerServing, fluidMl, ...kept } = target;
+    const replacement = {
+      ...snapshotFromItem({ ...clone(item), servingLabel: String(item.servingLabel ?? target.servingLabel) }, servings, kept),
+      correctedAt: clock().toISOString()
+    };
+    if (!item.analysis && target.analysis) replacement.analysis = clone(target.analysis);
+    updateDatedMap('log', correction.date, list => list.map(candidate => candidate.id === target.id ? replacement : candidate));
+  }
+
   // Entries added from outside the app (for example by Claude) through the cloud inbox.
   function applyInboxEntry(entry) {
     if (entry?.kind === 'fill') return fillLogEntry(entry);
+    if (entry?.kind === 'correct') return correctLogEntry(entry);
     const item = entry?.item;
     if (!item || typeof item.name !== 'string' || !item.name.trim() || !LIBRARY_ITEM_TYPES.some(type => type.id === item.type)) {
       throw new TypeError('Inbox item is invalid');

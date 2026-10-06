@@ -25,6 +25,7 @@ import { progressSummary, rollingWeightSeries } from './trends.js';
 import { todayMetrics } from './today-metrics.js';
 import { analysisProvider } from './services/anthropic.js';
 import { drinkFluidMl } from './fluids.js';
+import { PRESET_GROUPS } from './presets.js';
 
 const DISCLAIMER = 'This app estimates nutrition and is not medical or dietetic advice. Targets are general references you can edit. Consult a qualified professional for personal medical or nutrition guidance.';
 
@@ -486,6 +487,7 @@ function renderAdd({ data, state }) {
   return `<section class="page stack" aria-labelledby="add-title">
     <div class="page-heading"><div><span class="eyebrow">${escapeHtml(dateLabel(state.selectedDate))}</span><h1 id="add-title">Add</h1></div></div>
     ${analysisContent}
+    <form class="card stack" data-action="open-preset" aria-labelledby="presets-heading"><h2 id="presets-heading">Presets</h2><label>Product<select name="presetId" required><option value="">Choose a product</option>${PRESET_GROUPS.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.items.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)} · ${escapeHtml(item.servingLabel)}</option>`).join('')}</optgroup>`).join('')}</select></label><button class="secondary-button" type="submit">Review</button><p class="muted">Values come from each product's printed label. Set servings on the next screen, like 0.5 for half a bottle.</p></form>
     <section class="card stack" aria-labelledby="saved-heading"><h2 id="saved-heading">Favorites and recent items</h2>${recent.length ? `<ul class="plain-list">${recent.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.servingLabel)}</small></span><button class="secondary-button" type="button" data-action="open-library-item" data-item-id="${escapeHtml(item.id)}">Review</button></li>`).join('')}</ul>` : '<p class="muted">Your reusable items will appear here.</p>'}</section>
     <button class="quiet-button full-width" type="button" data-action="open-manual-entry">Enter nutrition manually</button>
   </section>`;
