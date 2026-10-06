@@ -472,7 +472,7 @@ function renderAttachedPhotos(state) {
 
 function renderAdd({ data, state }) {
   const serviceName = analysisProvider(data.settings) === 'anthropic' ? 'Anthropic' : 'Google Gemini';
-  // Items with no nutrition yet (such as the unfilled Huel placeholders) are kept out of one-tap adding.
+  // Items with no nutrition yet are kept out of one-tap adding.
   const recent = sortedLibrary(data.library).filter(item => item.type !== 'supplement' && hasKnownNutrition(item)).slice(0, 5);
   const analysis = state.analysis;
   const analysisContent = analysis?.status === 'loading'

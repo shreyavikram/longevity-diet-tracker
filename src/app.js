@@ -36,30 +36,6 @@ import { createLocalFoodSearch } from './services/usda-local.js';
 import { findPreset } from './presets.js';
 
 const VALID_ROUTES = new Set(['today', 'add', 'library', 'progress', 'settings']);
-const HUEL_SEEDS = Object.freeze([
-  {
-    id: 'seed-huel-black-edition',
-    type: 'packaged',
-    name: 'Huel Black Edition-style smoothie',
-    servingLabel: 'Enter current package serving',
-    perServing: {},
-    provenance: {},
-    favorite: false,
-    verified: false,
-    seedTag: 'huel-unverified'
-  },
-  {
-    id: 'seed-huel-hot-savory',
-    type: 'packaged',
-    name: 'Huel Hot & Savory meal',
-    servingLabel: 'Enter current package serving',
-    perServing: {},
-    provenance: {},
-    favorite: false,
-    verified: false,
-    seedTag: 'huel-unverified'
-  }
-]);
 
 const clone = value => structuredClone(value);
 const FOCUS_DATA_KEYS = ['action', 'route', 'itemId', 'entryId', 'nutrientId', 'nutrientOrigin', 'metricId', 'mealKey', 'date', 'ml', 'days', 'id', 'photoIndex'];
@@ -541,11 +517,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     return next;
   }
 
-  function seedHuelLibrary() {
-    store.update('library', library => {
-      const ids = new Set(library.map(item => item.id));
-      return [...library, ...HUEL_SEEDS.filter(item => !ids.has(item.id)).map(clone)];
-    });
+  // The two empty Huel placeholders that were seeded before presets existed are removed (her request, 2026-10-05).
+  // One she filled in with nutrition is kept.
+  function removeEmptyPlaceholders() {
+    const library = store.get('library');
+    const kept = library.filter(item => item.seedTag !== 'huel-unverified' || knownNutrientKeys(normalizeNutrients(item.perServing ?? {})).size);
+    if (kept.length !== library.length) store.set('library', kept);
   }
 
   function completeOnboarding(action) {
@@ -558,7 +535,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       units: action.units ?? settings.units,
       usesSupplements: action.usesSupplements ?? settings.usesSupplements ?? false
     }));
-    seedHuelLibrary();
     store.update('meta', meta => ({
       ...meta,
       onboardingComplete: true,
@@ -1918,6 +1894,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   function start() {
     ensureSetup();
+    removeEmptyPlaceholders();
     const root = getRoot();
     if (root && !listenersBound) {
       root.addEventListener('click', guarded(handleClick));
@@ -1951,4 +1928,3 @@ if (typeof document !== 'undefined' && typeof localStorage !== 'undefined') {
   createApp({ store }).start();
 }
 
-export { HUEL_SEEDS };
