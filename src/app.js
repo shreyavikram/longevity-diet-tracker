@@ -130,7 +130,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   if (!store) throw new TypeError('A store is required');
   const state = { route: 'today', selectedDate: rememberedDay(), progressDate: localDate(clock()),
     editingBodyMetricDate: null, dialog: null, draft: null, libraryQuery: '', analysis: null,
-    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, onTrackOpen: false, expandedMetric: null, openMeals: [], addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
+    dataStatus: '', notice: null, cloudStatus: '', coverageOpen: false, onTrackOpen: false, expandedMetric: null, presetGroup: null, openMeals: [], addText: '', photoCount: 0, photoNote: '', installStatus: '', canInstall: false, updateReady: false };
   // The day being viewed survives a reload (iOS reloads a backgrounded app, for example while the camera is
   // open, and applying an update reloads too) for an hour after it was last used, then it is today again.
   function rememberedDay() {
@@ -1438,6 +1438,14 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       state.onTrackOpen = !state.onTrackOpen;
       render();
     }
+    if (control.dataset.action === 'toggle-preset-group') {
+      const id = String(control.dataset.id ?? '');
+      state.presetGroup = state.presetGroup === id ? null : id;
+      render();
+    }
+    if (control.dataset.action === 'open-preset') {
+      dispatch({ type: 'OPEN_PRESET', presetId: String(control.dataset.id ?? '') });
+    }
     if (control.dataset.action === 'toggle-metric') {
       const id = String(control.dataset.metricId ?? '');
       state.expandedMetric = state.expandedMetric === id ? null : id;
@@ -1638,9 +1646,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           foodDataCentralApiKey: formData.get('foodDataCentralApiKey'),
           model: formData.get('model')
         });
-        break;
-      case 'open-preset':
-        dispatch({ type: 'OPEN_PRESET', presetId: String(formData.get('presetId') ?? '') });
         break;
       case 'search-library':
         dispatch({ type: 'SET_LIBRARY_QUERY', query: formData.get('query') });

@@ -568,3 +568,7 @@ details > summary { display: flex; min-height: 44px; align-items: center; cursor
 .on-track-dots i { display: block; width: 9px; height: 9px; border-radius: 50%; background: var(--n); }
 .meal-summary { background: var(--surface); }
 .add-action { border-radius: 16px; }
+
+.preset-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; }
+.preset-group { gap: 4px; }
+.preset-toggle > span:last-child { flex: 0 0 auto; white-space: nowrap; }

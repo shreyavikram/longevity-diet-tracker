@@ -65,11 +65,11 @@ const ROWS = {
 const GROUPS = Object.freeze([
   { id: 'silk', label: 'Silk soymilk', name: name => name.includes('Unsweet') ? `${name} (green carton)` : `${name} (red carton)`,
     fluidMl: 240, classification: name => name.includes('Unsweet') ? 'unsweetenedSoy' : 'sweetenedDairySoy' },
-  { id: 'powder', label: 'Huel Black Edition shake (powder)', name: name => `Huel Black Edition ${name} shake`, fluidMl: 500,
+  { id: 'powder', label: 'Huel Black Edition shakes (powder)', name: name => `Huel Black Edition ${name} shake`, fluidMl: 500,
     classification: () => 'composite', note: 'Made with 500 mL (about 2 cups) of water, as the label directs. Change the water amount if you mixed it with something else.' },
-  { id: 'rtd', label: 'Huel Black Edition bottle', name: name => `Huel Black Edition ${name} bottle`, fluidMl: 500,
+  { id: 'rtd', label: 'Huel Black Edition bottles', name: name => `Huel Black Edition ${name} bottle`, fluidMl: 500,
     classification: () => 'composite' },
-  { id: 'hs', label: 'Huel Hot & Savory pouch', name: name => `Huel Hot & Savory ${name}`, fluidMl: null,
+  { id: 'hs', label: 'Huel Hot & Savory pouches', name: name => `Huel Hot & Savory ${name}`, fluidMl: null,
     classification: () => 'composite' }
 ]);
 
@@ -124,6 +124,7 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
   return {
     id: `preset-${group.id}-${slug(rawName)}`,
     presetGroup: group.id,
+    shortName: group.id === 'silk' ? group.name(rawName) : rawName,
     type: 'packaged',
     name: group.name(rawName),
     servingLabel,
