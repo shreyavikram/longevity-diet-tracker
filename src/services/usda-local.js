@@ -2,6 +2,7 @@
 // so everyday lookups need no network, key, or rate limit. Results use the same shape as live USDA results.
 const STOP_WORDS = new Set(['and', 'with', 'the', 'for', 'plain', 'fresh', 'food', 'foods']);
 const clean = text => String(text ?? '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const reportsFiber = food => Number(Number.isFinite(food.values?.fiberG));
 const words = text => clean(text).split(' ').filter(word => word.length > 2 && !STOP_WORDS.has(word));
 
 export function createLocalFoodSearch({ fetchFn = globalThis.fetch, url = './data/usda-foods.json' } = {}) {
@@ -13,6 +14,7 @@ export function createLocalFoodSearch({ fetchFn = globalThis.fetch, url = './dat
       .then(response => response?.ok ? response.json() : null)
       .then(data => data?.version === 1 ? data.foods.map(([fdcId, description, type, values]) => ({
         fdcId,
+        filledFrom: data.filled?.[fdcId],
         description,
         dataType: data.types[type] ?? type,
         text: ` ${clean(description)} `,
@@ -36,10 +38,12 @@ export function createLocalFoodSearch({ fetchFn = globalThis.fetch, url = './dat
     return foods
       .map(food => ({ food, matched: wanted.filter(word => food.text.includes(` ${word}`)).length }))
       .filter(item => item.matched >= needed)
-      .sort((left, right) => right.matched - left.matched || left.food.description.length - right.food.description.length)
+      // Between equal matches, a record that reports fiber comes first (her choice, 2026-10-08).
+      .sort((left, right) => right.matched - left.matched || reportsFiber(right.food) - reportsFiber(left.food)
+        || left.food.description.length - right.food.description.length)
       .slice(0, limit)
       .map(({ food }) => ({ fdcId: food.fdcId, description: food.description, dataType: food.dataType, brand: '',
         servingSize: null, servingSizeUnit: null, servingLabel: null, basis: 'per100g', values: { ...food.values },
-        retrievedAt: 'On-device USDA copy', publishedAt: null }));
+        retrievedAt: 'On-device USDA copy', publishedAt: null, ...(food.filledFrom ? { filledFrom: { ...food.filledFrom } } : {}) }));
   };
 }

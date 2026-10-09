@@ -111,6 +111,7 @@ export function rankCandidates(component, foods) {
         + (packaged ? (type === 'branded' ? 30 : 0) : (type === 'foundation' || type === 'sr legacy' || type.includes('fndds') || type.includes('survey') ? 20 : 0))
         + (item.brand && query.includes(clean(item.brand)) ? 20 : 0);
     };
-    return score(right) - score(left) || String(left.description).localeCompare(String(right.description));
+    const reportsFiber = item => Number(Number.isFinite(item.values?.fiberG));
+    return score(right) - score(left) || reportsFiber(right) - reportsFiber(left) || String(left.description).localeCompare(String(right.description));
   });
 }
