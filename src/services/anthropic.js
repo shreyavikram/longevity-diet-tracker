@@ -77,12 +77,16 @@ function parseResponse(rawText) {
     || !validStringArray(parsed.assumptions) || !Array.isArray(parsed.components)
     || !parsed.components.length || parsed.components.length > 40) throw invalid();
   for (const component of parsed.components) {
-    if (!exactKeys(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients', 'preparation'])
+    if (!exactKeys(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients', 'preparation', 'productId', 'productServings'])
       || (component.preparation !== undefined && (typeof component.preparation !== 'string' || component.preparation.length > 120))
       || !nonempty(component.name) || !nonempty(component.householdAmount)
       || !nonempty(component.usdaSearch) || !Number.isFinite(component.estimatedGrams)
       || component.estimatedGrams <= 0 || component.estimatedGrams > 100000
       || !confidence(component.confidence)) throw invalid();
+    // A known product (src/known-products.js) is named by id with the number of its servings eaten; both or neither.
+    if ((component.productId === undefined) !== (component.productServings === undefined)
+      || (component.productId !== undefined && (!nonempty(component.productId) || component.productId.length > 100
+        || !Number.isFinite(component.productServings) || component.productServings <= 0 || component.productServings > 100))) throw invalid();
     if (component.fallbackNutrients !== undefined && (!record(component.fallbackNutrients)
       || Object.entries(component.fallbackNutrients).some(([key, value]) => !FALLBACK_KEYS.has(key) || !Number.isFinite(value) || value < 0))) throw invalid();
   }
@@ -111,7 +115,11 @@ There may be several photos; together they show this one entry (for example a me
 If the person's text itself states nutrition numbers for what they ate (for example copied from a label or a website), put each one in "statedNutrients" per serving exactly as written, using the allowed labelNutrients keys and units; never compute, convert, or guess these values. Numbers the person wrote override anything shown in the photos.
 If the description contains a product link, read the page to identify the exact product. If the page shows nutrition facts, transcribe them exactly into "labelNutrients" per printed serving with "labelServingGrams", just as for a label photo, and note in assumptions that they came from the product page. If you cannot read the page, do not guess its nutrition from the link text: use the product name, and say in assumptions that the page could not be read.
 For a recipe that makes more than one serving, include "totalServings": a positive number. For a clear photographed nutrition label only, you may add "labelNutrients" with exact transcribed values per printed label serving, a positive "labelServingGrams", and "labelComponentIndex": the zero-based index of the one component described by the photographed product label. Never apply label values to a whole prepared mixture containing other ingredients. If the label component or printed serving grams cannot be identified, ask a clarification question. Allowed labelNutrients keys and units: ${NUTRIENT_DEFINITIONS.map(item => `${item.key} (${item.unit})`).join(', ')}. Never put estimated values in labelNutrients or statedNutrients, and never invent supplement doses.
-Add "classification" for the whole entry, one of: ${[...CLASSIFICATION_IDS].join(', ')}. Use juice for fruit or vegetable juice, smoothie for blended or puréed drinks, honeySyrup for honey or syrups, wholeFruit, vegetable, unsweetenedDriedFruit or sweetenedDriedFruit, plainDairy or unsweetenedSoy for unsweetened milk or yogurt, sweetenedDairySoy for sweetened ones, composite for mixed meals and packaged foods, and other when the evidence is insufficient. If an ingredient list is visible or given, copy it into "ingredientsText" exactly. Never infer a numeric added-sugar amount from ingredient order. Each component may add "preparation": a short note that changes how quickly its carbohydrate is digested (for example boiled, baked, raw, puréed, whole grain, instant). State assumptions explicitly. Allowed confidence: high, medium, low. No other fields.`;
+Add "classification" for the whole entry, one of: ${[...CLASSIFICATION_IDS].join(', ')}. Use juice for fruit or vegetable juice, smoothie for blended or puréed drinks, honeySyrup for honey or syrups, wholeFruit, vegetable, unsweetenedDriedFruit or sweetenedDriedFruit, plainDairy or unsweetenedSoy for unsweetened milk or yogurt, sweetenedDairySoy for sweetened ones, composite for mixed meals and packaged foods, and other when the evidence is insufficient. If an ingredient list is visible or given, copy it into "ingredientsText" exactly. Never infer a numeric added-sugar amount from ingredient order. Each component may add "preparation": a short note that changes how quickly its carbohydrate is digested (for example boiled, baked, raw, puréed, whole grain, instant).
+The input may list "knownProducts": products whose printed labels this person keeps. When a component is clearly one of them, add "productId" (its id) and "productServings" (how many of its listed servings were eaten, for example 0.5 for half a bottle or 4 for 4 cups of a 1 cup product); the app then uses the printed label for that component. Never use a known product for a different brand or product. If the entry names a brand or product type that matches more than one known product and does not say which (for example Silk soymilk without saying Unsweet or Original, or a Huel shake that could be a bottle or a powder), ask which one; never pick one. "Regular" Silk means Original.
+This person is strictly vegan: milk, yogurt, cheese, butter, sausage, burger, and similar words mean the plant-based version unless the entry says otherwise.
+For a recipe or batch whose yield is unknown, ask how much of it was eaten (cups, pieces, or a share of the batch) instead of assuming a number of servings.
+State assumptions explicitly. Allowed confidence: high, medium, low. No other fields.`;
 
 function bytesToBase64(bytes) {
   let binary = '';
@@ -214,7 +222,7 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
 const MAX_PHOTO_BYTES = 8_000_000;
 const MAX_TOTAL_PHOTO_BYTES = 14_000_000;
 
-export async function requestAnalysis({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait }) {
+export async function requestAnalysis({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait }) {
   if (!VALID_KINDS.has(kind)) throw new AnalysisError('invalid_input', 'Choose a supported analysis type.');
   const provider = analysisProvider(settings);
   if (provider === 'gemini' && !settings?.geminiApiKey) throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
@@ -236,7 +244,7 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
       if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     }
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
-    const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients });
+    const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients, ...(knownProducts.length ? { knownProducts } : {}) });
     const call = provider === 'gemini' ? callGemini : callAnthropic;
     const reply = await call({ settings, photos, userText, fetchFn, signal, wait });
     const parsed = parseResponse(reply.text);

@@ -4,6 +4,7 @@ import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS } from './constants
 import { extractIngredients, parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
 import { deriveSugarBreakdown } from './sugar.js';
 import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
+import { productPromptList, productValues } from './known-products.js';
 
 const MICROS = new Set(NUTRIENTS.filter(item => item.group === 'micros').map(item => item.key));
 const CANONICAL = CANONICAL_NUTRIENT_KEYS;
@@ -106,11 +107,13 @@ export function resolveDraft(draft, selections = {}) {
     const scaledLabel = hasLabelValues && index === labelComponentIndex
       ? Object.fromEntries(Object.entries(labelValues).map(([key, value]) => [key, value * component.estimatedGrams / draft.labelServingGrams])) : {};
     const labelled = hasLabelValues && index === labelComponentIndex;
+    const product = component.product;
     // The AI's estimate fills whatever the USDA record leaves unknown (USDA wins where it reports). A labelled
-    // product keeps exactly what its label says.
-    const fallback = !labelled && component.fallbackNutrients ? component.fallbackNutrients : undefined;
-    const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined,
-      label: Object.keys(scaledLabel).length ? scaledLabel : undefined, ai: fallback });
+    // product, photographed or known (src/known-products.js), keeps exactly what its label says.
+    const fallback = !labelled && !product && component.fallbackNutrients ? component.fallbackNutrients : undefined;
+    const label = product ? { values: productValues(product, product.servings), provenance: product.provenance }
+      : Object.keys(scaledLabel).length ? scaledLabel : undefined;
+    const merged = mergeNutrientSources({ usda: selected ? { ...selected, values: scaledUsda } : undefined, label, ai: fallback });
     componentCarbs.push(Object.fromEntries(['carbsG', 'fiberG'].filter(key => Number.isFinite(merged.values[key]))
       .map(key => [key, merged.values[key] / servings])));
     for (const [key, value] of Object.entries(merged.values)) {
@@ -118,7 +121,9 @@ export function resolveDraft(draft, selections = {}) {
       reportedBy[key] = (reportedBy[key] ?? 0) + 1;
       const source = merged.provenance[key];
       const contributor = { ...source, componentIndex: index, componentName: component.name, amount: value };
-      if (source.source === 'label') Object.assign(contributor, { labelServingGrams: draft.labelServingGrams,
+      if (product) Object.assign(contributor, { productId: product.id, productServings: product.servings,
+        ...(product.provenance[key]?.sourceUrl ? { sourceUrl: product.provenance[key].sourceUrl } : {}) });
+      else if (source.source === 'label') Object.assign(contributor, { labelServingGrams: draft.labelServingGrams,
         trackedServingGrams, scaleFactor: labelBasis.scaleFactor });
       const contributors = [...(provenance[key]?.contributors ?? []), contributor];
       provenance[key] = summarizeContributors(contributors);
@@ -146,9 +151,14 @@ export function resolveDraft(draft, selections = {}) {
   const basisNote = labelBasis ? `Label values for ${labelBasis.componentName} scaled from ${labelBasis.printedServingGrams} g printed serving to ${labelBasis.trackedServingGrams} g of that ingredient per tracked serving.` : null;
   const assumptions = [...(draft.assumptions ?? [])];
   if (basisNote && !assumptions.includes(basisNote)) assumptions.push(basisNote);
+  for (const { product } of components) {
+    const note = product ? `${product.name} from its printed label (${product.servings} × ${product.servingLabel}).` : null;
+    if (note && !assumptions.includes(note)) assumptions.push(note);
+  }
   const glycemic = buildItemGlycemic({ perServing: { ...perServing, ...(perServing.micros ?? {}) },
     components: components.map((component, index) => ({ name: component.name, nutrients: componentCarbs[index],
-      gi: matchGiEvidence(component) ?? matchGiEvidence({ name: component.usdaSearch, preparation: component.preparation }) })) });
+      gi: component.product ? component.product.gi
+        : matchGiEvidence(component) ?? matchGiEvidence({ name: component.usdaSearch, preparation: component.preparation }) })) });
   return { ...draft, classification, ingredientsText, glycemic, labelComponentIndex, components, assumptions, labelBasis, recipeTotal: nested(recipeTotal), perServing,
     provenance: sugar.provenance, ingredientEvidence: sugar.ingredientEvidence, sugarIssues: sugar.sugarIssues,
     pendingCandidates: components.flatMap((component, index) => component.matchResolved
@@ -246,7 +256,7 @@ function labelTextDraft(label, text, labelText = text) {
     labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };
 }
 
-export async function analyzeInput({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
+export async function analyzeInput({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
   const typedLabel = parseNutritionLabel(text);
   if (typedLabel) return { status: 'estimate', draft: labelTextDraft(typedLabel, text) };
   // Numbers she typed (in the entry or an answer) override the label, USDA, and the AI for those nutrients.
@@ -271,7 +281,9 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     if (photoLabel) return { status: 'estimate', draft: applyStatedNutrients({ ...labelTextDraft(photoLabel, text, texts.join('\n')), labelReader }, typed) };
   }
   onStage('asking-ai');
-  const parsed = await requestAnalysis({ kind, text, images, clarificationHistory, settings, trackedNutrients, fetchFn, signal, wait });
+  const parsed = await requestAnalysis({ kind, text, images, clarificationHistory, settings, trackedNutrients,
+    knownProducts: productPromptList(knownProducts), fetchFn, signal, wait });
+  const productsById = new Map(knownProducts.map(product => [product.id, product]));
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
   // Label questions apply to any trusted nutrition facts: a label photo, or a product page Google read.
@@ -316,6 +328,16 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     if (Object.keys(parsed.labelNutrients ?? {}).length) {
       components.push({ ...component, candidates: [], selectedFdcId: null, matchResolved: true });
       continue;
+    }
+    // A known product the AI recognized uses its printed label; an id that is not on the list is ignored.
+    const product = component.productId ? productsById.get(component.productId) : null;
+    if (product) {
+      components.push({ ...component, product: { ...product, servings: component.productServings }, candidates: [], selectedFdcId: null, matchResolved: true });
+      continue;
+    }
+    if (component.productId) {
+      delete component.productId;
+      delete component.productServings;
     }
     let candidates = [];
     let lookupError;

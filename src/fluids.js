@@ -18,9 +18,11 @@ export function isDrinkName(name) {
 // liquid amount is known.
 export function drinkFluidMl(estimate) {
   if (!estimate || !isDrinkName(estimate.name)) return null;
-  const liquid = (estimate.components ?? [])
-    .filter(component => LIQUID.test(component.name ?? '') && !NOT_LIQUID.test(component.name ?? ''))
-    .reduce((sum, component) => sum + grams(component.estimatedGrams), 0) + grams(estimate.plainWaterG);
+  // A known product (a Huel bottle, Silk by the cup) carries its own amount; other parts count by name.
+  const liquid = (estimate.components ?? []).reduce((sum, component) => sum + (Number.isFinite(component.productFluidMl)
+    ? grams(component.productFluidMl)
+    : LIQUID.test(component.name ?? '') && !NOT_LIQUID.test(component.name ?? '') ? grams(component.estimatedGrams) : 0), 0)
+    + grams(estimate.plainWaterG);
   if (!liquid) return null;
   const servings = Number.isFinite(estimate.totalServings) && estimate.totalServings > 0 ? estimate.totalServings : 1;
   return Math.round(liquid / servings / 10) * 10;

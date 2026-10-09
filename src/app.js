@@ -27,6 +27,7 @@ import { deriveSugarBreakdown, FOOD_CLASSIFICATIONS } from './sugar.js';
 import { buildItemGlycemic, scaleGlycemic } from './glycemic.js';
 import { MEAL_TYPES, suggestMealIdentity } from './meals.js';
 import { drinkFluidMl } from './fluids.js';
+import { knownProducts } from './known-products.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
@@ -241,6 +242,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
           const matched = component.candidates.find(food => String(food.fdcId) === String(component.selectedFdcId));
           return { name: component.name, householdAmount: component.householdAmount, estimatedGrams: component.estimatedGrams,
             usdaSearch: component.usdaSearch, ...(component.fallbackNutrients ? { fallbackNutrients: clone(component.fallbackNutrients) } : {}),
+            ...(component.product ? { productId: component.product.id, productServings: component.product.servings,
+              ...(component.product.fluidMl ? { productFluidMl: component.product.fluidMl * component.product.servings } : {}) } : {}),
             matched: matched ? { fdcId: matched.fdcId, description: matched.description } : null };
         }),
         perServing: clone(result.perServing),
@@ -312,7 +315,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       labelBasis: result.labelBasis,
       usdaProblems: result.components.filter(component => component.lookupError).map(component => ({ name: component.name, error: component.lookupError })),
       components: result.components.map(component => ({ name: component.name, grams: component.estimatedGrams,
-        source: result.fromLabel ? 'Nutrition label' : component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
+        source: result.fromLabel ? 'Nutrition label' : component.product ? `Printed label: ${component.product.name}` : component.candidates.find(food => food.fdcId === component.selectedFdcId)?.description ?? 'AI estimate (no USDA match)' }))
     } };
     state.analysis = null;
     render();
@@ -349,7 +352,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
     try {
       const result = await analyzeInput({ ...input, images: [...analysisImages], settings: store.get('settings'),
-        trackedNutrients: store.get('settings').trackedNutrients, fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText,
+        trackedNutrients: store.get('settings').trackedNutrients, knownProducts: knownProducts(store.get('library')), fetchFn, signal: analysisController.signal, searchCache, localSearch, recognizeText,
         onStage: stage => {
           if (generation !== analysisGeneration || state.analysis?.status !== 'loading') return;
           state.analysis = { ...state.analysis, stage };
