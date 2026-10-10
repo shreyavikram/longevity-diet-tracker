@@ -163,9 +163,14 @@ async function callAnthropic({ settings, photos = [], userText, fetchFn, signal,
 // Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
 const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const RETRY_AFTER_MS = 3000;
+// Google sometimes holds a request open without answering. Analysis gives up after 15 seconds in all, and a
+// model silent for 8 of them is abandoned so a faster fallback still has time to answer.
+export const GEMINI_DEADLINE_MS = 15000;
+const ATTEMPT_TIMEOUT_MS = 8000;
 const defaultWait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function callGemini({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait }) {
+async function callGemini({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait,
+  deadline = Date.now() + GEMINI_DEADLINE_MS, attemptTimeoutMs = ATTEMPT_TIMEOUT_MS }) {
   const model = String(settings.geminiModel || DEFAULT_GEMINI_MODEL).trim();
   const parts = photos.map(photo => ({ inlineData: { mimeType: photo.type, data: photo.data } }));
   parts.push({ text: userText });
@@ -173,12 +178,26 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
   const hasLink = systemPrompt === SYSTEM_PROMPT && LINK_PATTERN.test(userText);
   const body = JSON.stringify({ systemInstruction: { parts: [{ text: systemPrompt }] }, contents: [{ role: 'user', parts }],
     ...(hasLink ? { tools: [{ url_context: {} }], generationConfig: {} } : { generationConfig: { responseMimeType: 'application/json' } }) });
-  const attempt = name => fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(name)}:generateContent`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': settings.geminiApiKey, 'content-type': 'application/json' },
-    body,
-    signal
-  });
+  const attempt = async name => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    signal?.addEventListener('abort', stop, { once: true });
+    const timer = setTimeout(stop, Math.min(attemptTimeoutMs, deadline - Date.now()));
+    try {
+      return await fetchFn(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(name)}:generateContent`, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': settings.geminiApiKey, 'content-type': 'application/json' },
+        body,
+        signal: controller.signal
+      });
+    } catch (error) {
+      if (signal?.aborted || !controller.signal.aborted) throw error;
+      return { ok: false, status: 0, timedOut: true };
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
+    }
+  };
   // Google's free models are often overloaded at peak times. Try each in turn (an older fallback the key
   // cannot use answers 404 and is skipped), then pause briefly and try the two newest once more.
   const chain = [model, ...FALLBACK_GEMINI_MODELS.filter(fallback => fallback !== model)];
@@ -187,18 +206,24 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
   let lastFailure;
   rounds: for (let round = 0; round < 3; round += 1) {
     if (round) {
-      await wait(RETRY_AFTER_MS * round * round);
+      const pause = RETRY_AFTER_MS * round * round;
+      if (Date.now() + pause >= deadline) break;
+      await wait(pause);
       if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     }
     for (const name of round ? chain.slice(0, 2) : chain) {
+      if (Date.now() >= deadline) break rounds;
       response = await attempt(name);
       if (!tried.includes(name)) tried.push(name);
       if (response.status === 404 && name !== model) continue;
-      if (![429, 500, 503].includes(response.status)) break rounds;
+      if (![429, 500, 503].includes(response.status) && !response.timedOut) break rounds;
       lastFailure = response;
     }
   }
   if (!response.ok && lastFailure && [404].includes(response.status)) response = lastFailure;
+  if (response.timedOut) {
+    throw new AnalysisError('timeout', `Gemini did not answer within ${Math.round(GEMINI_DEADLINE_MS / 1000)} seconds. Try again in a minute, or add a favorite or enter nutrition manually. Tried ${tried.join(', ')}.`);
+  }
   if (!response.ok) {
     let error = {};
     try { error = (await response.json())?.error ?? {}; } catch { error = {}; }
@@ -222,7 +247,7 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
 const MAX_PHOTO_BYTES = 8_000_000;
 const MAX_TOTAL_PHOTO_BYTES = 14_000_000;
 
-export async function requestAnalysis({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait }) {
+export async function requestAnalysis({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait, deadline, attemptTimeoutMs }) {
   if (!VALID_KINDS.has(kind)) throw new AnalysisError('invalid_input', 'Choose a supported analysis type.');
   const provider = analysisProvider(settings);
   if (provider === 'gemini' && !settings?.geminiApiKey) throw new AnalysisError('missing_key', 'Add a free Gemini API key in Settings to use analysis.');
@@ -246,7 +271,7 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
     if (signal?.aborted) throw new AnalysisError('cancelled', 'Analysis cancelled.');
     const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients, ...(knownProducts.length ? { knownProducts } : {}) });
     const call = provider === 'gemini' ? callGemini : callAnthropic;
-    const reply = await call({ settings, photos, userText, fetchFn, signal, wait });
+    const reply = await call({ settings, photos, userText, fetchFn, signal, wait, deadline, attemptTimeoutMs });
     const parsed = parseResponse(reply.text);
     const hasLink = LINK_PATTERN.test(text);
     const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && (images.length > 0 || reply.linkRead));
@@ -275,7 +300,7 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
 
 // Asks the configured AI service to pick each ingredient's USDA record, so the person never has to.
 // Resolves a Map of component index to fdcId (or null when nothing fits).
-export async function requestMatchChoice({ components, settings, fetchFn = globalThis.fetch, signal, wait }) {
+export async function requestMatchChoice({ components, settings, fetchFn = globalThis.fetch, signal, wait, deadline, attemptTimeoutMs }) {
   const provider = analysisProvider(settings);
   const listed = components.map((component, index) => ({ component: index, name: component.name, amount: component.householdAmount,
     candidates: component.candidates.map(food => ({ fdcId: food.fdcId, description: food.description, type: food.dataType,
@@ -284,7 +309,7 @@ export async function requestMatchChoice({ components, settings, fetchFn = globa
   try {
     const call = provider === 'gemini' ? callGemini : callAnthropic;
     const raw = String((await call({ settings, userText: JSON.stringify({ ingredients: listed }),
-      fetchFn, signal, wait, systemPrompt: MATCH_PROMPT })).text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+      fetchFn, signal, wait, deadline, attemptTimeoutMs, systemPrompt: MATCH_PROMPT })).text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
     let parsed;
     try { parsed = JSON.parse(raw); } catch { throw invalid(); }
     if (!exactKeys(parsed, ['choices']) || !Array.isArray(parsed.choices)) throw invalid();

@@ -1,4 +1,4 @@
-import { requestAnalysis, requestMatchChoice, AnalysisError } from './services/anthropic.js';
+import { requestAnalysis, requestMatchChoice, AnalysisError, GEMINI_DEADLINE_MS } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
 import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
 import { extractIngredients, parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
@@ -256,7 +256,7 @@ function labelTextDraft(label, text, labelText = text) {
     labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };
 }
 
-export async function analyzeInput({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {} }) {
+export async function analyzeInput({ kind, text = '', image, images = image ? [image] : [], clarificationHistory = [], settings, trackedNutrients = [], knownProducts = [], fetchFn = globalThis.fetch, signal, wait, searchCache, localSearch, recognizeText, onStage = () => {}, aiTimeoutMs = GEMINI_DEADLINE_MS, attemptTimeoutMs }) {
   const typedLabel = parseNutritionLabel(text);
   if (typedLabel) return { status: 'estimate', draft: labelTextDraft(typedLabel, text) };
   // Numbers she typed (in the entry or an answer) override the label, USDA, and the AI for those nutrients.
@@ -281,8 +281,10 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
     if (photoLabel) return { status: 'estimate', draft: applyStatedNutrients({ ...labelTextDraft(photoLabel, text, texts.join('\n')), labelReader }, typed) };
   }
   onStage('asking-ai');
+  // One time budget covers both AI steps; matching that runs out of time falls back to the AI's own estimates.
+  const deadline = Date.now() + aiTimeoutMs;
   const parsed = await requestAnalysis({ kind, text, images, clarificationHistory, settings, trackedNutrients,
-    knownProducts: productPromptList(knownProducts), fetchFn, signal, wait });
+    knownProducts: productPromptList(knownProducts), fetchFn, signal, wait, deadline, attemptTimeoutMs });
   const productsById = new Map(knownProducts.map(product => [product.id, product]));
   if (parsed.status === 'needs_clarification') return parsed;
   dropPlainWater(parsed);
@@ -370,7 +372,7 @@ export async function analyzeInput({ kind, text = '', image, images = image ? [i
   // The AI picks each ingredient's USDA record; if that step fails, its own estimates stand in.
   let choices = new Map();
   try {
-    choices = await requestMatchChoice({ components, settings, fetchFn, signal, wait });
+    choices = await requestMatchChoice({ components, settings, fetchFn, signal, wait, deadline, attemptTimeoutMs });
   } catch (error) {
     if (error.code === 'cancelled') throw error;
   }
