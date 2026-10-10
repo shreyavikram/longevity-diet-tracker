@@ -163,10 +163,11 @@ async function callAnthropic({ settings, photos = [], userText, fetchFn, signal,
 // Each free-tier model has its own allowance, so a busy or exhausted model falls through to the next.
 const FALLBACK_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
 const RETRY_AFTER_MS = 3000;
-// Google sometimes holds a request open without answering. Analysis gives up after 15 seconds in all, and a
-// model silent for 8 of them is abandoned so a faster fallback still has time to answer.
-export const GEMINI_DEADLINE_MS = 15000;
-const ATTEMPT_TIMEOUT_MS = 8000;
+// Google sometimes holds a request open without answering. Analysis gives up after 90 seconds in all, and a
+// model silent for 45 of them is abandoned so a fallback still has time to answer. Gemini 3.8 Flash thinks at
+// medium effort, so shorter limits cut off slow but working answers.
+export const GEMINI_DEADLINE_MS = 90000;
+const ATTEMPT_TIMEOUT_MS = 45000;
 const defaultWait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function callGemini({ settings, photos = [], userText, fetchFn, signal, systemPrompt = SYSTEM_PROMPT, wait = defaultWait,
