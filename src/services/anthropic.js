@@ -9,7 +9,18 @@ export class AnalysisError extends Error {
   }
 }
 
-const invalid = () => new AnalysisError('invalid_response', 'The analysis response could not be read. Try again or enter nutrition manually.');
+// The reason names fields and checks only, never values from the answer, so nothing the person typed is echoed.
+const invalid = reason => Object.assign(new AnalysisError('invalid_response',
+  `The analysis response could not be read${reason ? ` (${reason})` : ''}. Try again or enter nutrition manually.`), { reason });
+const quoted = key => `"${String(key).slice(0, 40)}"`;
+// Says which required field is missing or which extra one was added, or '' when the keys are right.
+function keyProblem(value, required, optional = []) {
+  if (!record(value)) return 'not an object';
+  const missing = required.filter(key => !Object.hasOwn(value, key));
+  if (missing.length) return `missing ${missing.map(quoted).join(', ')}`;
+  const extra = Object.keys(value).filter(key => !required.includes(key) && !optional.includes(key));
+  return extra.length ? `unexpected field ${extra.map(quoted).join(', ')}` : '';
+}
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, required, optional = []) => record(value)
   && required.every(key => Object.hasOwn(value, key))
@@ -43,9 +54,10 @@ function geminiText(payload) {
     throw new AnalysisError('blocked', 'Gemini declined to analyze this. Try a different photo or description, or enter nutrition manually.');
   }
   const parts = candidate?.content?.parts;
-  if (!Array.isArray(parts)) throw invalid();
+  if (!Array.isArray(parts)) throw invalid(`no answer text${candidate?.finishReason ? `, finish reason ${String(candidate.finishReason).slice(0, 40)}` : ''}`);
   return {
     text: parts.filter(part => typeof part?.text === 'string' && !part.thought).map(part => part.text).join(''),
+    finishReason: typeof candidate.finishReason === 'string' ? candidate.finishReason.slice(0, 40) : '',
     // True only when Google confirms it actually read a linked page.
     linkRead: Boolean(candidate.urlContextMetadata?.urlMetadata?.some(item => item?.urlRetrievalStatus === 'URL_RETRIEVAL_STATUS_SUCCESS'))
   };
@@ -59,45 +71,57 @@ function parseResponse(rawText) {
     // With the link reader on, Gemini may wrap the JSON in a sentence; read the one object inside.
     const start = json.indexOf('{');
     const end = json.lastIndexOf('}');
-    try { parsed = JSON.parse(json.slice(start, end + 1)); } catch { throw invalid(); }
-    if (start < 0) throw invalid();
+    try { parsed = JSON.parse(json.slice(start, end + 1)); } catch { throw invalid(raw ? 'not complete JSON' : 'empty answer'); }
+    if (start < 0) throw invalid('not complete JSON');
   }
   if (parsed?.status === 'needs_clarification') {
-    if (!exactKeys(parsed, ['status', 'questions']) || !Array.isArray(parsed.questions)
-      || !parsed.questions.length || parsed.questions.length > 5 || !parsed.questions.every(question =>
-        exactKeys(question, ['id', 'prompt']) && nonempty(question.id) && nonempty(question.prompt))) throw invalid();
+    const problem = keyProblem(parsed, ['status', 'questions']);
+    if (problem) throw invalid(`question: ${problem}`);
+    if (!Array.isArray(parsed.questions) || !parsed.questions.length || parsed.questions.length > 5) throw invalid('question list is empty or too long');
+    for (const [index, question] of parsed.questions.entries()) {
+      const fields = keyProblem(question, ['id', 'prompt']);
+      if (fields || !nonempty(question.id) || !nonempty(question.prompt)) throw invalid(`question ${index + 1}: ${fields || 'blank or too long'}`);
+    }
     return parsed;
   }
-  if (parsed?.status !== 'estimate' || !exactKeys(parsed,
-    ['status', 'name', 'servingLabel', 'components', 'confidence', 'assumptions'],
-    ['totalServings', 'labelNutrients', 'labelServingGrams', 'labelComponentIndex', 'statedNutrients', 'classification', 'ingredientsText'])) throw invalid();
-  if (parsed.classification !== undefined && !CLASSIFICATION_IDS.has(parsed.classification)) throw invalid();
-  if (parsed.ingredientsText !== undefined && (typeof parsed.ingredientsText !== 'string' || parsed.ingredientsText.length > 2000)) throw invalid();
-  if (!nonempty(parsed.name) || !nonempty(parsed.servingLabel) || !confidence(parsed.confidence)
-    || !validStringArray(parsed.assumptions) || !Array.isArray(parsed.components)
-    || !parsed.components.length || parsed.components.length > 40) throw invalid();
-  for (const component of parsed.components) {
-    if (!exactKeys(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients', 'preparation', 'productId', 'productServings'])
-      || (component.preparation !== undefined && (typeof component.preparation !== 'string' || component.preparation.length > 120))
-      || !nonempty(component.name) || !nonempty(component.householdAmount)
-      || !nonempty(component.usdaSearch) || !Number.isFinite(component.estimatedGrams)
-      || component.estimatedGrams <= 0 || component.estimatedGrams > 100000
-      || !confidence(component.confidence)) throw invalid();
+  if (parsed?.status !== 'estimate') throw invalid(`status is not "estimate" or "needs_clarification"`);
+  const topProblem = keyProblem(parsed, ['status', 'name', 'servingLabel', 'components', 'confidence', 'assumptions'],
+    ['totalServings', 'labelNutrients', 'labelServingGrams', 'labelComponentIndex', 'statedNutrients', 'classification', 'ingredientsText']);
+  if (topProblem) throw invalid(topProblem);
+  if (parsed.classification !== undefined && !CLASSIFICATION_IDS.has(parsed.classification)) throw invalid('unknown "classification"');
+  if (parsed.ingredientsText !== undefined && (typeof parsed.ingredientsText !== 'string' || parsed.ingredientsText.length > 2000)) throw invalid('"ingredientsText" is not text or too long');
+  if (!nonempty(parsed.name)) throw invalid('"name" is blank or too long');
+  if (!nonempty(parsed.servingLabel)) throw invalid('"servingLabel" is blank or too long');
+  if (!confidence(parsed.confidence)) throw invalid('"confidence" is not high, medium, or low');
+  if (!validStringArray(parsed.assumptions)) throw invalid('"assumptions" is not a list of short texts');
+  if (!Array.isArray(parsed.components) || !parsed.components.length || parsed.components.length > 40) throw invalid('"components" is empty or too long');
+  for (const [index, component] of parsed.components.entries()) {
+    const bad = what => invalid(`ingredient ${index + 1}: ${what}`);
+    const fields = keyProblem(component, ['name', 'householdAmount', 'estimatedGrams', 'usdaSearch', 'confidence'], ['fallbackNutrients', 'preparation', 'productId', 'productServings']);
+    if (fields) throw bad(fields);
+    if (component.preparation !== undefined && (typeof component.preparation !== 'string' || component.preparation.length > 120)) throw bad('"preparation" is not short text');
+    for (const key of ['name', 'householdAmount', 'usdaSearch']) if (!nonempty(component[key])) throw bad(`${quoted(key)} is blank or too long`);
+    if (!Number.isFinite(component.estimatedGrams) || component.estimatedGrams <= 0 || component.estimatedGrams > 100000) throw bad('"estimatedGrams" is not a positive number');
+    if (!confidence(component.confidence)) throw bad('"confidence" is not high, medium, or low');
     // A known product (src/known-products.js) is named by id with the number of its servings eaten; both or neither.
     if ((component.productId === undefined) !== (component.productServings === undefined)
       || (component.productId !== undefined && (!nonempty(component.productId) || component.productId.length > 100
-        || !Number.isFinite(component.productServings) || component.productServings <= 0 || component.productServings > 100))) throw invalid();
-    if (component.fallbackNutrients !== undefined && (!record(component.fallbackNutrients)
-      || Object.entries(component.fallbackNutrients).some(([key, value]) => !FALLBACK_KEYS.has(key) || !Number.isFinite(value) || value < 0))) throw invalid();
+        || !Number.isFinite(component.productServings) || component.productServings <= 0 || component.productServings > 100))) throw bad('"productId" and "productServings" do not fit together');
+    if (component.fallbackNutrients !== undefined) {
+      if (!record(component.fallbackNutrients)) throw bad('"fallbackNutrients" is not an object');
+      const wrong = Object.entries(component.fallbackNutrients).find(([key, value]) => !FALLBACK_KEYS.has(key) || !Number.isFinite(value) || value < 0);
+      if (wrong) throw bad(`fallback nutrient ${quoted(wrong[0])} is ${FALLBACK_KEYS.has(wrong[0]) ? 'not a number of zero or more' : 'not allowed'}`);
+    }
   }
   if (parsed.totalServings !== undefined && (!Number.isFinite(parsed.totalServings)
-    || parsed.totalServings <= 0 || parsed.totalServings > 1000)) throw invalid();
-  if (parsed.labelNutrients !== undefined && (!record(parsed.labelNutrients)
-    || Object.entries(parsed.labelNutrients).some(([key, value]) =>
-      !NUTRIENT_KEYS.has(key) || !Number.isFinite(value) || value < 0))) throw invalid();
-  if (parsed.labelComponentIndex !== undefined && !Number.isInteger(parsed.labelComponentIndex)) throw invalid();
-  if (parsed.statedNutrients !== undefined && (!record(parsed.statedNutrients)
-    || Object.entries(parsed.statedNutrients).some(([key, value]) => !NUTRIENT_KEYS.has(key) || !Number.isFinite(value) || value < 0))) throw invalid();
+    || parsed.totalServings <= 0 || parsed.totalServings > 1000)) throw invalid('"totalServings" is not a positive number');
+  for (const field of ['labelNutrients', 'statedNutrients']) {
+    if (parsed[field] === undefined) continue;
+    if (!record(parsed[field])) throw invalid(`${quoted(field)} is not an object`);
+    const wrong = Object.entries(parsed[field]).find(([key, value]) => !NUTRIENT_KEYS.has(key) || !Number.isFinite(value) || value < 0);
+    if (wrong) throw invalid(`${field} ${quoted(wrong[0])} is ${NUTRIENT_KEYS.has(wrong[0]) ? 'not a number of zero or more' : 'not allowed'}`);
+  }
+  if (parsed.labelComponentIndex !== undefined && !Number.isInteger(parsed.labelComponentIndex)) throw invalid('"labelComponentIndex" is not a whole number');
   return parsed;
 }
 
@@ -203,6 +227,7 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
   // cannot use answers 404 and is skipped), then pause briefly and try the two newest once more.
   const chain = [model, ...FALLBACK_GEMINI_MODELS.filter(fallback => fallback !== model)];
   const tried = [];
+  let answeredBy = model;
   let response;
   let lastFailure;
   rounds: for (let round = 0; round < 3; round += 1) {
@@ -215,6 +240,7 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
     for (const name of round ? chain.slice(0, 2) : chain) {
       if (Date.now() >= deadline) break rounds;
       response = await attempt(name);
+      answeredBy = name;
       if (!tried.includes(name)) tried.push(name);
       if (response.status === 404 && name !== model) continue;
       if (![429, 500, 503].includes(response.status) && !response.timedOut) break rounds;
@@ -240,8 +266,13 @@ async function callGemini({ settings, photos = [], userText, fetchFn, signal, sy
       : `Gemini could not run this analysis. Google said: ${google}`);
   }
   let payload;
-  try { payload = await response.json(); } catch { throw invalid(); }
-  return geminiText(payload);
+  try { payload = await response.json(); } catch { throw invalid(`${answeredBy}: not JSON`); }
+  try {
+    return { ...geminiText(payload), model: answeredBy };
+  } catch (error) {
+    if (error.code === 'invalid_response') throw invalid(`${answeredBy}: ${error.reason}`);
+    throw error;
+  }
 }
 
 // Photos are sent inline, so together they must stay under the services' request size limits.
@@ -273,7 +304,12 @@ export async function requestAnalysis({ kind, text = '', image, images = image ?
     const userText = JSON.stringify({ kind, description: text, clarificationHistory, trackedNutrients, ...(knownProducts.length ? { knownProducts } : {}) });
     const call = provider === 'gemini' ? callGemini : callAnthropic;
     const reply = await call({ settings, photos, userText, fetchFn, signal, wait, deadline, attemptTimeoutMs });
-    const parsed = parseResponse(reply.text);
+    let parsed;
+    try { parsed = parseResponse(reply.text); } catch (error) {
+      if (error.code !== 'invalid_response') throw error;
+      const source = [reply.model, reply.finishReason && reply.finishReason !== 'STOP' ? `finish reason ${reply.finishReason}` : ''].filter(Boolean).join(', ');
+      throw invalid([source, error.reason].filter(Boolean).join(': '));
+    }
     const hasLink = LINK_PATTERN.test(text);
     const labelAllowed = kind === 'labelPhoto' || (kind === 'auto' && (images.length > 0 || reply.linkRead));
     // Nutrition facts said to come from a link Google could not read are not trusted.
