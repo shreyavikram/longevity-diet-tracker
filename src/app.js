@@ -157,6 +157,17 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   let analysisGeneration = 0;
   let analysisImages = [];
   let pwa = null;
+  let updateApplied = false;
+  // A new version installs itself as soon as nothing is in progress, so an old copy never lingers on the phone.
+  // Applying it reloads the page, which would lose an analysis, an open entry, or typed text, so those wait.
+  function applyUpdateWhenIdle() {
+    if (updateApplied || !state.updateReady || !pwa) return;
+    if (state.analysis || state.draft || state.dialog || state.entryQueue || state.editingBodyMetricDate
+      || String(state.addText ?? '').trim() || state.photoCount) return;
+    // Someone typing in a field (in Settings, for example) is mid-edit even when nothing else shows it.
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(documentRef?.activeElement?.tagName)) return;
+    updateApplied = pwa.applyUpdate() !== false;
+  }
 
   // Photos stay in memory only (never in state or storage); the state holds just how many there are.
   const MAX_PHOTOS = 6;
@@ -447,6 +458,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     restoreFocus(focused);
     rememberDay();
     schedulePush();
+    applyUpdateWhenIdle();
     const nutrientDialog = documentRef?.querySelector?.('.nutrient-dialog');
     if (nutrientDialog) {
       nutrientDialog.addEventListener?.('cancel', event => {
@@ -1913,8 +1925,9 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       pwa = pwaFactory({
         onStatus: status => { state.installStatus = status; refreshPwaRegions(); },
         onInstall: available => { state.canInstall = available; refreshPwaRegions(); },
-        onUpdate: ready => { state.updateReady = ready; refreshPwaRegions(); }
+        onUpdate: ready => { state.updateReady = ready; refreshPwaRegions(); applyUpdateWhenIdle(); }
       });
+      applyUpdateWhenIdle();
       documentRef?.addEventListener?.('visibilitychange', () => {
         if (documentRef.visibilityState === 'visible') {
           syncActivity();
