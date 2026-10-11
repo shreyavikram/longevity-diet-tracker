@@ -2,6 +2,8 @@
 // bottles, and Hot & Savory pouches, typed from the makers' published Nutrition Facts panels (retrieved 2026-10-05).
 // Every value is a printed label value. Omega-3 is from Huel's "Additional Facts" (flaxseed, so ALA); for the
 // bottles it is Huel's formula page figure. Silk prints no selenium, zinc, or choline, so those stay unknown.
+// The Huel Complete Nutrition Bar (her request, 2026-10-10) prints no omega-3, so ALA stays unknown; its maltitol
+// is kept as sugar alcohol.
 import { NUTRIENTS } from './constants.js';
 import { deriveSugarBreakdown } from './sugar.js';
 import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
@@ -11,12 +13,14 @@ const SOURCES = Object.freeze({
   silk: 'https://silk.com/plant-based-products/soymilk/',
   powder: 'https://huel.com/products/huel-black-edition',
   rtd: 'https://huel.com/products/huel-black-edition-ready-to-drink',
-  hs: 'https://huel.com/products/hot-and-savoury-meal-packs'
+  hs: 'https://huel.com/products/hot-and-savoury-meal-packs',
+  bar: 'https://huel.com/products/huel-bar/chocolate-chip-cookie-dough'
 });
+const RETRIEVED_BY_GROUP = Object.freeze({ bar: '2026-10-10' });
 // Column order of each row after its name and serving: label units (vitamin D in mcg, omega-3 in g).
 const COLUMNS = ['calories', 'fatG', 'saturatedFatG', 'transFatG', 'sodiumMg', 'carbsG', 'fiberG', 'totalSugarG',
   'addedSugarG', 'proteinG', 'vitDMcg', 'ironMg', 'calciumMg', 'potassiumMg', 'b12Mcg', 'folateDfeMcg', 'magnesiumMg',
-  'seleniumMcg', 'iodineMcg', 'zincMg', 'cholineMg', 'alaG'];
+  'seleniumMcg', 'iodineMcg', 'zincMg', 'cholineMg', 'alaG', 'sugarAlcoholG'];
 
 const ROWS = {
   silk: [
@@ -60,6 +64,9 @@ const ROWS = {
     ['Korean BBQ Noodles', '1 pouch (107 g)', 400, 8, 1, 0, 540, 64, 6, 8, 5, 22, 4, 4.6, 260, 1200, 0.8, 80, 90, 11, 30, 2.2, 110, 2],
     ['Spicy Gochujang Noodles', '1 pouch (107 g)', 400, 8, 1, 0, 580, 64, 6, 5, 2, 22, 4, 4.6, 260, 1320, 0.8, 80, 90, 11, 30, 2.2, 110, 2],
   ],
+  bar: [
+    ['Chocolate Chip Cookie Dough', '1 bar (55 g)', 190, 7, 3, 0, 45, 27, 7, 2, 0, 13, 2.1, 2.1, 130, 470, 0.4, 40, 62, 8.2, 23, 1.5, 54, null, 12],
+  ],
 };
 
 const GROUPS = Object.freeze([
@@ -70,6 +77,8 @@ const GROUPS = Object.freeze([
   { id: 'rtd', label: 'Huel Black Edition bottles', name: name => `Huel Black Edition ${name} bottle`, fluidMl: 500,
     classification: () => 'composite' },
   { id: 'hs', label: 'Huel Hot & Savory pouches', name: name => `Huel Hot & Savory ${name}`, fluidMl: null,
+    classification: () => 'composite' },
+  { id: 'bar', label: 'Huel bars', name: name => `Huel Complete Nutrition Bar ${name}`, fluidMl: null,
     classification: () => 'composite' }
 ]);
 
@@ -88,6 +97,7 @@ const PASTA = ['Mac & Cheeze', 'Cajun Pasta', "Chick'n & Mushroom Pasta", 'Pasta
 function giEvidence(groupId, name) {
   if (groupId === 'silk') return matchGiEvidence({ name: 'soy milk', preparation: 'drink' });
   if (groupId === 'powder') return tested(19, 'Huel Black Edition powder, tested 2020 (flavor not stated)', 'medium');
+  if (groupId === 'bar') return tested(19, 'Huel Complete Nutrition Bar, tested 2024 (flavor not stated)', 'medium');
   if (groupId === 'rtd') return estimated(25, 19, 30, 'Huel Black Edition powder (19) and Huel Ready-to-drink (25, 30)');
   if (name === 'Thai Green Curry') return tested(19, 'Huel Hot & Savory Thai Green Curry, tested 2021');
   if (name === 'Mexican Chili') return tested(31, 'Huel Hot & Savory Mexican Chili, tested 2021');
@@ -103,7 +113,8 @@ const GROUP_OF = Object.fromEntries(NUTRIENTS.map(definition => [definition.key,
 function buildItem(group, [rawName, servingLabel, ...values]) {
   const flat = {};
   const provenance = {};
-  const record = { source: 'label', confidence: 'high', sourceUrl: SOURCES[group.id], retrievedAt: RETRIEVED };
+  const retrieved = RETRIEVED_BY_GROUP[group.id] ?? RETRIEVED;
+  const record = { source: 'label', confidence: 'high', sourceUrl: SOURCES[group.id], retrievedAt: retrieved };
   COLUMNS.forEach((column, index) => {
     const value = values[index];
     if (!Number.isFinite(value)) return;
@@ -118,7 +129,7 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
     if (GROUP_OF[key]) (perServing[GROUP_OF[key]] ??= {})[key] = value;
     else perServing[key] = value;
   }
-  const assumptions = [`Printed Nutrition Facts for ${servingLabel}, from ${SOURCES[group.id]} (retrieved ${RETRIEVED}).`];
+  const assumptions = [`Printed Nutrition Facts for ${servingLabel}, from ${SOURCES[group.id]} (retrieved ${retrieved}).`];
   if (group.note) assumptions.push(group.note);
   if (values[COLUMNS.indexOf('totalSugarG')] === 0.5) assumptions.push('The label says less than 1 g of total sugar, stored as 0.5 g.');
   return {
