@@ -1,6 +1,6 @@
 import { requestAnalysis, requestMatchChoice, AnalysisError, GEMINI_DEADLINE_MS } from './services/anthropic.js';
 import { searchFoods, rankCandidates } from './services/food-data-central.js';
-import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS } from './constants.js';
+import { CANONICAL_NUTRIENT_KEYS, MACRO_NUTRIENTS, NUTRIENTS, SOURCE_NUTRIENTS } from './constants.js';
 import { extractIngredients, parseNutritionLabel, statedNutrientsFromText } from './nutrition-label.js';
 import { deriveSugarBreakdown } from './sugar.js';
 import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
@@ -236,6 +236,8 @@ function applyStatedNutrients(draft, stated) {
     assumptions: draft.assumptions.includes(note) ? draft.assumptions : [...draft.assumptions, note] };
 }
 
+const nutrientName = key => [...MACRO_NUTRIENTS, ...SOURCE_NUTRIENTS, ...NUTRIENTS].find(item => item.key === key)?.label.toLocaleLowerCase('en-US') ?? key;
+
 // A label read from text (typed, pasted, or recognized on the device) becomes a draft directly: no AI,
 // no USDA, no network.
 function labelTextDraft(label, text, labelText = text) {
@@ -250,7 +252,8 @@ function labelTextDraft(label, text, labelText = text) {
   const carbs = Object.fromEntries(['carbsG', 'fiberG'].filter(key => Number.isFinite(label.nutrients[key])).map(key => [key, label.nutrients[key]]));
   const glycemic = buildItemGlycemic({ perServing: label.nutrients, components: [{ name, nutrients: carbs, gi: matchGiEvidence({ name }) }] });
   return { classification, ingredientsText, ingredientEvidence, sugarIssues, glycemic, kind: 'labelPhoto', method: 'label-text', fromLabel: true, labelKind: label.kind, name, servingLabel, confidence: 'high',
-    totalServings: 1, assumptions: ['Read from the nutrition label on this device; no AI or online lookup was used.'],
+    totalServings: 1, assumptions: ['Read from the nutrition label on this device; no AI or online lookup was used.',
+      ...Object.entries(label.lessThan ?? {}).map(([key, bound]) => `The label says less than ${bound} of ${nutrientName(key)}, stored as half that.`)],
     components: [{ name, householdAmount: servingLabel, estimatedGrams: label.servingGrams ?? 0, usdaSearch: name, confidence: 'high',
       candidates: [], selectedFdcId: null, matchResolved: true }],
     labelBasis: null, recipeTotal: perServing, perServing, provenance, pendingCandidates: [] };

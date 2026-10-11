@@ -1,6 +1,7 @@
 // Reads the text of a US Nutrition Facts or Supplement Facts panel (from on-device text recognition or
 // text copied from a photo) into exact per-serving values. No AI is involved. Values are only what the
-// panel prints: "less than" amounts are left unknown and explicit zeros stay known zeros.
+// panel prints: explicit zeros stay known zeros, and a "less than" amount ("<1g") is stored as half its bound,
+// as the label presets do.
 const UNIT_FAMILY = { g: 'g', mg: 'mg', mq: 'mg', mcg: 'mcg', mecg: 'mcg', meg: 'mcg', imeg: 'mcg', µg: 'mcg', μg: 'mcg', ug: 'mcg', iu: 'iu' };
 const TO_UNIT = {
   g: { g: 1, mg: 0.001, mcg: 0.000001 },
@@ -11,7 +12,8 @@ const TO_UNIT = {
 // Each nutrient: its app key, how the panel names it, and the unit the app stores it in.
 const FIELDS = [
   ['fatG', /(?:total\s+fat|(?<![a-z]\s)(?<![a-z])fat(?!\s*,)(?=[^\n\d]{0,12}\d))/, 'g'],
-  ['saturatedFatG', /(?:saturated|sat\.)\s*fat/, 'g'],
+  // "Polyunsaturated" and "Monounsaturated" are not saturated fat; the leading "s" is sometimes not read.
+  ['saturatedFatG', /(?:(?<![a-z])s?aturated|sat\.)\s*fat/, 'g'],
   ['transFatG', /trans\.?\s*fat/, 'g'],
   ['totalSugarG', /total\s+sugars?/, 'g'],
   ['sodiumMg', /sodium/, 'mg'],
@@ -38,8 +40,8 @@ const toNumber = text => Number(String(text).replace(/,/g, ''));
 
 function amountAfter(text, name) {
   const match = new RegExp(`${name.source}${AMOUNT}`, 'i').exec(text);
-  if (!match || match[1]) return null;
-  return { value: toNumber(match[2]), raw: match[2], unit: UNIT_FAMILY[match[3].toLowerCase()], end: match.index + match[0].length };
+  if (!match) return null;
+  return { value: toNumber(match[2]), raw: match[2], unit: UNIT_FAMILY[match[3].toLowerCase()], end: match.index + match[0].length, lessThan: Boolean(match[1]) };
 }
 
 // Current US label Daily Values, in the same units the app stores. A printed percentage is useful independent
@@ -183,12 +185,15 @@ export function statedNutrientsFromText(input) {
 export function parseNutritionLabel(input) {
   const text = String(input ?? '').replace(/[•·|]/g, '\n').replace(/[ \t]+/g, ' ')
     // A narrow second "1" is sometimes read as "i" immediately before a microgram unit ("11mcg" → "1imecg").
-    .replace(/(\d)i(?=m(?:e)?cg\b)/gi, (_match, digit) => `${digit}1`);
+    .replace(/(\d)i(?=m(?:e)?cg\b)/gi, (_match, digit) => `${digit}1`)
+    // A printed zero is often read as the letter O ("Trans Fat Og", "Sodium Omg").
+    .replace(/(^|[^A-Za-z])O(?=\s?(?:mcg|mg|g)\b)/g, '$10');
   const kind = /supplement\s+facts/i.test(text) ? 'supplement'
     : /nutrition(?:al)?\s+(?:facts|info(?:rmation)?)|amount\s+per\s+serving|%\s*daily\s+value/i.test(text) ? 'nutrition' : null;
   const repairsDailyValues = kind === 'nutrition';
   const nutrients = {};
   const corrected = [];
+  const lessThan = {};
 
   const calories = /calories\s*:?\s*(\d[\d,]*)/i.exec(text);
   if (calories) nutrients.calories = toNumber(calories[1]);
@@ -207,6 +212,11 @@ export function parseNutritionLabel(input) {
       continue;
     }
     if (!amount || amount.unit === 'iu' || !TO_UNIT[unit][amount.unit]) continue;
+    if (amount.lessThan) {
+      nutrients[key] = Number((amount.value / 2 * TO_UNIT[unit][amount.unit]).toPrecision(6));
+      lessThan[key] = `${amount.raw} ${amount.unit}`;
+      continue;
+    }
     const read = Number((amount.value * TO_UNIT[unit][amount.unit]).toPrecision(6));
     const value = repairsDailyValues ? correctedByDailyValue(key, read, amount.raw, text, amount.end) : read;
     if (value === null) continue;
@@ -219,11 +229,12 @@ export function parseNutritionLabel(input) {
   corrected.push(...Object.keys(gramOptions));
 
   const added = /includes\s+(<\s*)?(\d+(?:\.\d+)?)\s*g\s+added\s+sugars?/i.exec(text) ?? /added\s+sugars?\s+(<\s*)?(\d+(?:\.\d+)?)\s*g/i.exec(text);
-  if (added && !added[1]) nutrients.addedSugarG = toNumber(added[2]);
+  if (added) nutrients.addedSugarG = added[1] ? toNumber(added[2]) / 2 : toNumber(added[2]);
+  if (added?.[1]) lessThan.addedSugarG = `${added[2]} g`;
 
   // Vitamin D: prefer a printed IU amount, otherwise convert micrograms (1 mcg = 40 IU).
   const vitaminD = amountAfter(text, /vit(?:amin|\.)?\s*d\s*[23]?/);
-  if (vitaminD) {
+  if (vitaminD && !vitaminD.lessThan) {
     const iu = /^[^\n]{0,30}?\(?\s*(\d[\d,]*(?:\.\d+)?)\s*iu\b/i.exec(text.slice(vitaminD.end));
     if (vitaminD.unit === 'iu') nutrients.vitDIu = vitaminD.value;
     else if (iu) nutrients.vitDIu = toNumber(iu[1]);
@@ -246,7 +257,7 @@ export function parseNutritionLabel(input) {
   const serving = /serving\s+size\s*:?\s*([^\n]+)/i.exec(text);
   const servingLabel = serving ? serving[1].trim().replace(/\s+/g, ' ') : null;
   const grams = servingLabel ? /(\d+(?:\.\d+)?)\s*g\b/i.exec(servingLabel) ?? /\((\d+)9\)/.exec(servingLabel) : null;
-  return { kind: kind ?? 'nutrition', servingLabel, servingGrams: grams ? Number(grams[1]) : null, nutrients, corrected };
+  return { kind: kind ?? 'nutrition', servingLabel, servingGrams: grams ? Number(grams[1]) : null, nutrients, corrected, lessThan };
 }
 
 // The ingredient list printed with a label ("Ingredients: oats, brown rice syrup, ..."), or null. Used only as

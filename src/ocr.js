@@ -20,7 +20,7 @@ function loadScript(documentRef, src) {
   });
 }
 
-function longestDarkRun(data, width, height, x) {
+function longestDarkRun(dark, width, height, x) {
   let bestStart = 0;
   let bestLength = 0;
   let start = 0;
@@ -28,9 +28,7 @@ function longestDarkRun(data, width, height, x) {
   const first = Math.round(height * 0.03);
   const last = Math.round(height * 0.97);
   for (let y = first; y < last; y += 1) {
-    const offset = (y * width + x) * 4;
-    const luminance = data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
-    if (luminance < 150) {
+    if (dark[y * width + x]) {
       if (!length) start = y;
       length += 1;
       if (length > bestLength) {
@@ -42,6 +40,39 @@ function longestDarkRun(data, width, height, x) {
   return { start: bestStart, end: bestStart + bestLength, length: bestLength };
 }
 
+// Dark pixels, widened by one pixel each side: a thin border photographed at a slight tilt drifts between
+// neighboring columns, and no single column would hold it from top to bottom.
+function darkMask(pixels, width, height) {
+  const raw = new Uint8Array(width * height);
+  for (let index = 0; index < raw.length; index += 1) {
+    const offset = index * 4;
+    raw[index] = pixels[offset] * 0.2126 + pixels[offset + 1] * 0.7152 + pixels[offset + 2] * 0.0722 < 150 ? 1 : 0;
+  }
+  const dark = new Uint8Array(raw.length);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      dark[index] = raw[index] || (x > 0 && raw[index - 1]) || (x < width - 1 && raw[index + 1]) ? 1 : 0;
+    }
+  }
+  return dark;
+}
+
+// The rules printed between nutrients run from one border to the other. A box drawn around a label has many;
+// a box around cooking instructions, or around the label plus whatever is printed beside it, has few or none.
+function ruleCount(dark, width, { left, right, top, bottom }) {
+  let rules = 0;
+  let inRule = false;
+  for (let y = top; y < bottom; y += 1) {
+    let count = 0;
+    for (let x = left; x <= right; x += 1) count += dark[y * width + x];
+    const full = count >= (right - left + 1) * 0.9;
+    if (full && !inRule) rules += 1;
+    inRule = full;
+  }
+  return rules;
+}
+
 // Most US Nutrition Facts panels have a tall dark border. Finding that border before recognition removes
 // ingredients, instructions, and page chrome that otherwise split values away from their nutrient names.
 function nutritionPanel(bitmap, documentRef) {
@@ -51,10 +82,10 @@ function nutritionPanel(bitmap, documentRef) {
   canvas.height = Math.max(1, Math.round(bitmap.height * scale));
   const context = canvas.getContext('2d', { willReadFrequently: true });
   context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const dark = darkMask(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
   const lines = [];
   for (let x = 1; x < canvas.width - 1; x += 1) {
-    const run = longestDarkRun(pixels, canvas.width, canvas.height, x);
+    const run = longestDarkRun(dark, canvas.width, canvas.height, x);
     if (run.length < canvas.height * 0.35) continue;
     const previous = lines.at(-1);
     if (previous && x === previous.lastX + 1) {
@@ -75,8 +106,9 @@ function nutritionPanel(bitmap, documentRef) {
       const width = right.x - left.x;
       const aspect = width / height;
       if (height < canvas.height * 0.3 || width < canvas.width * 0.15 || aspect < 0.25 || aspect > 1.25) continue;
-      const score = height * width;
-      if (!best || score > best.score) best = { left: left.x, right: right.x, top, bottom, score };
+      const box = { left: left.x, right: right.x, top, bottom };
+      const candidate = { ...box, rules: ruleCount(dark, canvas.width, box), area: height * width };
+      if (!best || candidate.rules > best.rules || (candidate.rules === best.rules && candidate.area > best.area)) best = candidate;
     }
   }
   if (!best) return null;
