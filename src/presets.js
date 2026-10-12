@@ -3,7 +3,8 @@
 // Every value is a printed label value. Omega-3 is from Huel's "Additional Facts" (flaxseed, so ALA); for the
 // bottles it is Huel's formula page figure. Silk prints no selenium, zinc, or choline, so those stay unknown.
 // The Huel Complete Nutrition Bar (her request, 2026-10-10) prints no omega-3, so ALA stays unknown; its maltitol
-// is kept as sugar alcohol.
+// is kept as sugar alcohol. MorningStar Farms (her request, 2026-10-12) are typed from Kellanova's SmartLabel pages,
+// which match her Chik'n Strips package photo; they print no B vitamins, zinc, or omega-3, so those stay unknown.
 import { NUTRIENTS } from './constants.js';
 import { deriveSugarBreakdown } from './sugar.js';
 import { buildItemGlycemic, matchGiEvidence } from './glycemic.js';
@@ -14,9 +15,14 @@ const SOURCES = Object.freeze({
   powder: 'https://huel.com/products/huel-black-edition',
   rtd: 'https://huel.com/products/huel-black-edition-ready-to-drink',
   hs: 'https://huel.com/products/hot-and-savoury-meal-packs',
-  bar: 'https://huel.com/products/huel-bar/chocolate-chip-cookie-dough'
+  bar: 'https://huel.com/products/huel-bar/chocolate-chip-cookie-dough',
+  morningstar: 'https://smartlabel.kelloggs.com/'
 });
-const RETRIEVED_BY_GROUP = Object.freeze({ bar: '2026-10-10' });
+const SOURCE_BY_NAME = Object.freeze({
+  'Original Sausage Patties': 'https://smartlabel.kelloggs.com/Product/Index/00028989094452',
+  "Chik'n Strips": 'https://smartlabel.kelloggs.com/Product/Index/00028989101297'
+});
+const RETRIEVED_BY_GROUP = Object.freeze({ bar: '2026-10-10', morningstar: '2026-10-12' });
 // Column order of each row after its name and serving: label units (vitamin D in mcg, omega-3 in g).
 const COLUMNS = ['calories', 'fatG', 'saturatedFatG', 'transFatG', 'sodiumMg', 'carbsG', 'fiberG', 'totalSugarG',
   'addedSugarG', 'proteinG', 'vitDMcg', 'ironMg', 'calciumMg', 'potassiumMg', 'b12Mcg', 'folateDfeMcg', 'magnesiumMg',
@@ -67,6 +73,10 @@ const ROWS = {
   bar: [
     ['Chocolate Chip Cookie Dough', '1 bar (55 g)', 190, 7, 3, 0, 45, 27, 7, 2, 0, 13, 2.1, 2.1, 130, 470, 0.4, 40, 62, 8.2, 23, 1.5, 54, null, 12],
   ],
+  morningstar: [
+    ['Original Sausage Patties', '1 patty (38 g)', 70, 2.5, 0, 0, 220, 4, 1, 0.5, 0.5, 10, 0, 1, 30, 110, null, null, null, null, null, null, null, null, null],
+    ["Chik'n Strips", 'About 13 strips (85 g)', 140, 3, 0, 0, 370, 5, 0.5, 0.5, 0, 24, 0, 2.5, 130, 40, null, null, null, null, null, null, null, null, null],
+  ],
 };
 
 const GROUPS = Object.freeze([
@@ -79,6 +89,8 @@ const GROUPS = Object.freeze([
   { id: 'hs', label: 'Huel Hot & Savory pouches', name: name => `Huel Hot & Savory ${name}`, fluidMl: null,
     classification: () => 'composite' },
   { id: 'bar', label: 'Huel bars', name: name => `Huel Complete Nutrition Bar ${name}`, fluidMl: null,
+    classification: () => 'composite' },
+  { id: 'morningstar', label: 'MorningStar Farms', name: name => `MorningStar Farms ${name}`, fluidMl: null,
     classification: () => 'composite' }
 ]);
 
@@ -98,6 +110,10 @@ function giEvidence(groupId, name) {
   if (groupId === 'silk') return matchGiEvidence({ name: 'soy milk', preparation: 'drink' });
   if (groupId === 'powder') return tested(19, 'Huel Black Edition powder, tested 2020 (flavor not stated)', 'medium');
   if (groupId === 'bar') return tested(19, 'Huel Complete Nutrition Bar, tested 2024 (flavor not stated)', 'medium');
+  // No MorningStar product has a published GI; each serving has only 3 to 5 g of available carbs, so GL is about 1.
+  if (groupId === 'morningstar') return { value: 30, range: { min: 15, max: 45 }, sourceType: 'estimate',
+    sourceName: 'Estimate for soy and wheat protein foods', referenceName: 'No GI test published for MorningStar products',
+    preparation: 'estimated', confidence: 'low' };
   if (groupId === 'rtd') return estimated(25, 19, 30, 'Huel Black Edition powder (19) and Huel Ready-to-drink (25, 30)');
   if (name === 'Thai Green Curry') return tested(19, 'Huel Hot & Savory Thai Green Curry, tested 2021');
   if (name === 'Mexican Chili') return tested(31, 'Huel Hot & Savory Mexican Chili, tested 2021');
@@ -114,7 +130,8 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
   const flat = {};
   const provenance = {};
   const retrieved = RETRIEVED_BY_GROUP[group.id] ?? RETRIEVED;
-  const record = { source: 'label', confidence: 'high', sourceUrl: SOURCES[group.id], retrievedAt: retrieved };
+  const sourceUrl = SOURCE_BY_NAME[rawName] ?? SOURCES[group.id];
+  const record = { source: 'label', confidence: 'high', sourceUrl, retrievedAt: retrieved };
   COLUMNS.forEach((column, index) => {
     const value = values[index];
     if (!Number.isFinite(value)) return;
@@ -129,9 +146,12 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
     if (GROUP_OF[key]) (perServing[GROUP_OF[key]] ??= {})[key] = value;
     else perServing[key] = value;
   }
-  const assumptions = [`Printed Nutrition Facts for ${servingLabel}, from ${SOURCES[group.id]} (retrieved ${retrieved}).`];
+  const assumptions = [`Printed Nutrition Facts for ${servingLabel}, from ${sourceUrl} (retrieved ${retrieved}).`];
   if (group.note) assumptions.push(group.note);
-  if (values[COLUMNS.indexOf('totalSugarG')] === 0.5) assumptions.push('The label says less than 1 g of total sugar, stored as 0.5 g.');
+  // A "<1 g" line is stored as half its bound, like the label reader does.
+  for (const [column, words] of [['fiberG', 'fiber'], ['totalSugarG', 'total sugar'], ['addedSugarG', 'added sugar']]) {
+    if (values[COLUMNS.indexOf(column)] === 0.5) assumptions.push(`The label says less than 1 g of ${words}, stored as 0.5 g.`);
+  }
   return {
     id: `preset-${group.id}-${slug(rawName)}`,
     presetGroup: group.id,
