@@ -153,11 +153,171 @@ function buildItem(group, [rawName, servingLabel, ...values]) {
   };
 }
 
-export const PRESET_GROUPS = Object.freeze(GROUPS.map(group => Object.freeze({
+const LABEL_GROUPS = GROUPS.map(group => ({
   id: group.id,
   label: group.label,
-  items: Object.freeze(ROWS[group.id].map(row => Object.freeze(buildItem(group, row))))
-})));
+  items: ROWS[group.id].map(row => buildItem(group, row))
+}));
+
+// Her recipes (her request, 2026-10-12). Each ingredient amount times a USDA record from the on-device copy
+// (data/usda-foods.json, per 100 g), or times a printed label: Silk Unsweet (the preset above, her carton) and Golden
+// Barrel blackstrap molasses (label values as transcribed by the maker's FAQ and nutrition sites, so medium
+// confidence). Like an analyzed recipe, a nutrient some ingredient does not report keeps its known part, marked
+// partial with the ingredient named; calories are reported by every ingredient. The molasses is the only free sugar.
+const USDA_COPY = 'On-device USDA copy';
+const USDA = {
+  wholeWheatFlour: [168893, 'SR Legacy', { calories: 340, proteinG: 13.2, carbsG: 72, fatG: 2.5, fiberG: 10.7, saturatedFatG: 0.43,
+    totalSugarG: 0.41, b12Mcg: 0, calciumMg: 34, cholineMg: 31.2, epaDhaMg: 0, folateDfeMcg: 44, ironMg: 3.6, magnesiumMg: 137,
+    potassiumMg: 363, seleniumMcg: 61.8, sodiumMg: 2, vitDIu: 0, zincMg: 2.6 }],
+  groundFlaxseed: [2262075, 'Foundation', { calories: 514, proteinG: 18, carbsG: 34.4, fatG: 37.3, fiberG: 23.1, saturatedFatG: 3.28,
+    alaG: 19.4, calciumMg: 230, ironMg: 5.78, magnesiumMg: 372, potassiumMg: 793, seleniumMcg: 136, sodiumMg: 36.7, zincMg: 4.74 }],
+  oliveOil: [171413, 'SR Legacy', { calories: 884, proteinG: 0, carbsG: 0, fatG: 100, fiberG: 0, saturatedFatG: 13.8, totalSugarG: 0,
+    b12Mcg: 0, calciumMg: 1, cholineMg: 0.3, epaDhaMg: 0, folateDfeMcg: 0, ironMg: 0.56, magnesiumMg: 0, potassiumMg: 1,
+    seleniumMcg: 0, sodiumMg: 2, vitDIu: 0, zincMg: 0 }],
+  blueberries: [173950, 'SR Legacy', { calories: 51, proteinG: 0.42, carbsG: 12.2, fatG: 0.64, fiberG: 2.7, saturatedFatG: 0.053,
+    transFatG: 0, totalSugarG: 8.45, b12Mcg: 0, calciumMg: 8, cholineMg: 5.1, epaDhaMg: 0, folateDfeMcg: 7, ironMg: 0.18,
+    magnesiumMg: 5, potassiumMg: 54, seleniumMcg: 0.1, sodiumMg: 1, vitDIu: 0, zincMg: 0.07 }],
+  cocoa: [169593, 'SR Legacy', { calories: 228, proteinG: 19.6, carbsG: 57.9, fatG: 13.7, fiberG: 37, saturatedFatG: 8.07,
+    totalSugarG: 1.75, b12Mcg: 0, calciumMg: 128, cholineMg: 12, epaDhaMg: 0, folateDfeMcg: 32, ironMg: 13.9, magnesiumMg: 499,
+    potassiumMg: 1520, seleniumMcg: 14.3, sodiumMg: 21, vitDIu: 0, zincMg: 6.81 }],
+  cinnamon: [171320, 'SR Legacy', { calories: 247, proteinG: 3.99, carbsG: 80.6, fatG: 1.24, fiberG: 53.1, saturatedFatG: 0.345,
+    transFatG: 0, totalSugarG: 2.17, alaG: 0.011, b12Mcg: 0, calciumMg: 1000, cholineMg: 11, epaDhaMg: 0, folateDfeMcg: 6,
+    ironMg: 8.32, magnesiumMg: 60, potassiumMg: 431, seleniumMcg: 3.1, sodiumMg: 10, vitDIu: 0, zincMg: 1.83 }],
+  salt: [173468, 'SR Legacy', { calories: 0, proteinG: 0, carbsG: 0, fatG: 0, fiberG: 0, saturatedFatG: 0, transFatG: 0, totalSugarG: 0,
+    b12Mcg: 0, calciumMg: 24, cholineMg: 0, epaDhaMg: 0, folateDfeMcg: 0, ironMg: 0.33, magnesiumMg: 1, potassiumMg: 8,
+    seleniumMcg: 0.1, sodiumMg: 38800, vitDIu: 0, zincMg: 0.1 }],
+  bakingPowder: [172803, 'SR Legacy', { calories: 53, proteinG: 0, carbsG: 27.7, fatG: 0, fiberG: 0.2, saturatedFatG: 0, totalSugarG: 0,
+    b12Mcg: 0, calciumMg: 5880, cholineMg: 0, epaDhaMg: 0, folateDfeMcg: 0, ironMg: 11, magnesiumMg: 27, potassiumMg: 20,
+    seleniumMcg: 0.2, sodiumMg: 10600, vitDIu: 0, zincMg: 0.01 }],
+  bakingSoda: [175040, 'SR Legacy', { calories: 0, proteinG: 0, carbsG: 0, fatG: 0, fiberG: 0, saturatedFatG: 0, totalSugarG: 0,
+    b12Mcg: 0, calciumMg: 0, cholineMg: 0, epaDhaMg: 0, folateDfeMcg: 0, ironMg: 0, magnesiumMg: 0, potassiumMg: 0,
+    seleniumMcg: 0.2, sodiumMg: 27400, vitDIu: 0, zincMg: 0 }],
+  ciderVinegar: [173469, 'SR Legacy', { calories: 21, proteinG: 0, carbsG: 0.93, fatG: 0, fiberG: 0, saturatedFatG: 0, transFatG: 0,
+    totalSugarG: 0.4, b12Mcg: 0, calciumMg: 7, cholineMg: 0, epaDhaMg: 0, folateDfeMcg: 0, ironMg: 0.2, magnesiumMg: 5,
+    potassiumMg: 73, seleniumMcg: 0.1, sodiumMg: 5, vitDIu: 0, zincMg: 0.04 }]
+};
+const MOLASSES = { name: 'Golden Barrel blackstrap molasses', servingLabel: '1 tbsp (21 g)',
+  sourceUrl: 'https://www.goldenbarrel.com/frequently-asked-questions-about-golden-barrel-molasses/', retrievedAt: '2026-10-12',
+  values: { calories: 60, fatG: 0, saturatedFatG: 0, transFatG: 0, sodiumMg: 25, carbsG: 14, fiberG: 0, totalSugarG: 11, proteinG: 1,
+    calciumMg: 203, ironMg: 3, potassiumMg: 466, magnesiumMg: 42 } };
+
+const SILK_UNSWEET_ID = 'preset-silk-silk-organic-unsweet-soymilk';
+const usda = (key, name, amount, grams) => ({ kind: 'usda', key, name, amount, grams });
+const silk = (amount, servings) => ({ kind: 'silk', name: 'Silk Organic Unsweet Soymilk', amount, servings });
+const molasses = (amount, servings) => ({ kind: 'molasses', name: 'Blackstrap molasses', amount, servings });
+
+const RECIPES = [
+  { id: 'whole-wheat-blueberry-pancakes', name: 'Whole wheat blueberry pancakes', servings: 2,
+    servingLabel: '1/2 batch (3 to 4 pancakes)', sourceUrl: 'https://sweetpotatosoul.com/whole-wheat-blueberry-pancakes/',
+    note: 'Sweet Potato Soul\'s recipe made her way: whole wheat flour, blackstrap molasses instead of sugar, ground flaxseed, Silk Unsweet, and olive oil in the batter and the pan.',
+    ingredients: [
+      usda('wholeWheatFlour', 'Whole wheat flour', '1 1/4 cups', 150),
+      molasses('2 tbsp', 2),
+      usda('groundFlaxseed', 'Ground flaxseed (flax meal)', '2 tbsp', 14),
+      usda('bakingPowder', 'Baking powder', '1 tsp', 4.6),
+      usda('bakingSoda', 'Baking soda', '1 tsp', 4.6),
+      usda('salt', 'Salt', '1/4 tsp', 1.5),
+      usda('cinnamon', 'Cinnamon', '1 tsp', 2.6),
+      silk('1 cup', 1),
+      usda('ciderVinegar', 'Apple cider vinegar', '2 tsp', 10),
+      usda('oliveOil', 'Olive oil (batter)', '2 tbsp', 27),
+      usda('oliveOil', 'Olive oil (pan)', '1 tsp', 4.5),
+      usda('blueberries', 'Frozen blueberries', '1 cup', 155)
+    ] },
+  // About 106 g of sauce; the powders thicken the liquid rather than add their full volume, so a batch is about 6 tbsp.
+  { id: 'flax-cocoa-molasses-chocolate-sauce', name: 'Flax cocoa chocolate sauce', servings: 6,
+    servingLabel: '1 tbsp (about 1/6 of a batch)', sourceUrl: null,
+    note: 'Her recipe: 2 tbsp ground flaxseed, 2 tbsp unsweetened cocoa, 1 tbsp blackstrap molasses, and 1/4 cup Silk Unsweet. A batch is estimated at about 6 tbsp; set servings to 6 for the whole batch.',
+    ingredients: [
+      usda('groundFlaxseed', 'Ground flaxseed (flax meal)', '2 tbsp', 14),
+      usda('cocoa', 'Unsweetened cocoa powder', '2 tbsp', 10.8),
+      molasses('1 tbsp', 1),
+      silk('1/4 cup', 0.25)
+    ] }
+];
+
+const LABEL_ITEMS = LABEL_GROUPS.flatMap(group => group.items);
+const flatValues = perServing => Object.fromEntries(Object.entries({ ...perServing, ...(perServing.micros ?? {}) })
+  .filter(([key, value]) => key !== 'micros' && key !== 'freeSugarG' && key !== 'intrinsicSugarG' && Number.isFinite(value)));
+const CONFIDENCE_RANK = { low: 0, medium: 1, high: 2 };
+
+// One ingredient's values for the whole batch, with the record each came from.
+function ingredientValues(ingredient) {
+  if (ingredient.kind === 'usda') {
+    const [fdcId, dataType, per100] = USDA[ingredient.key];
+    return { values: Object.fromEntries(Object.entries(per100).map(([key, value]) => [key, value * ingredient.grams / 100])),
+      record: { source: 'usda', confidence: 'medium', sourceId: String(fdcId), dataType, retrievedAt: USDA_COPY } };
+  }
+  if (ingredient.kind === 'silk') {
+    const carton = LABEL_ITEMS.find(item => item.id === SILK_UNSWEET_ID);
+    return { values: Object.fromEntries(Object.entries(flatValues(carton.perServing)).map(([key, value]) => [key, value * ingredient.servings])),
+      record: { source: 'label', confidence: 'high', sourceUrl: SOURCES.silk, retrievedAt: RETRIEVED, productId: SILK_UNSWEET_ID },
+      gi: carton.glycemic.components[0].gi };
+  }
+  return { values: Object.fromEntries(Object.entries(MOLASSES.values).map(([key, value]) => [key, value * ingredient.servings])),
+    record: { source: 'label', confidence: 'medium', sourceUrl: MOLASSES.sourceUrl, retrievedAt: MOLASSES.retrievedAt } };
+}
+
+function buildRecipe(recipe) {
+  const parts = recipe.ingredients.map(ingredient => ({ ingredient, ...ingredientValues(ingredient) }));
+  const flat = {};
+  const provenance = {};
+  const keys = new Set(parts.flatMap(part => Object.keys(part.values)));
+  for (const key of keys) {
+    const reporting = parts.filter(part => Number.isFinite(part.values[key]));
+    const contributors = reporting.map(part => ({ ...part.record, componentIndex: parts.indexOf(part),
+      componentName: part.ingredient.name, amount: part.values[key] / recipe.servings }));
+    flat[key] = contributors.reduce((sum, contributor) => sum + contributor.amount, 0);
+    const source = contributors.every(contributor => contributor.source === contributors[0].source) ? contributors[0].source : 'mixed';
+    const confidence = contributors.reduce((low, contributor) =>
+      CONFIDENCE_RANK[contributor.confidence] < CONFIDENCE_RANK[low] ? contributor.confidence : low, 'high');
+    provenance[key] = { source, confidence, contributors,
+      ...(reporting.length < parts.length ? { partial: true,
+        missingFrom: parts.filter(part => !reporting.includes(part)).map(part => part.ingredient.name) } : {}) };
+  }
+  // Molasses sugar is free sugar (a syrup) and FDA added sugar; every other ingredient's sugar is intrinsic.
+  const molassesSugar = parts.filter(part => part.ingredient.kind === 'molasses')
+    .reduce((sum, part) => sum + part.values.totalSugarG / recipe.servings, 0);
+  const molassesRecord = { source: 'label', confidence: 'medium', sourceUrl: MOLASSES.sourceUrl, retrievedAt: MOLASSES.retrievedAt };
+  flat.addedSugarG = molassesSugar;
+  provenance.addedSugarG = { ...molassesRecord, reasons: ['Only the blackstrap molasses is added sugar'] };
+  flat.freeSugarG = molassesSugar;
+  provenance.freeSugarG = { ...molassesRecord, method: 'food-rule', classification: 'composite',
+    reasons: ['Only the blackstrap molasses adds free sugar'] };
+  const sugar = deriveSugarBreakdown({ nutrients: flat, provenance, classification: 'composite' });
+  const perServing = {};
+  for (const [key, value] of Object.entries(sugar.nutrients)) {
+    if (GROUP_OF[key]) (perServing[GROUP_OF[key]] ??= {})[key] = value;
+    else perServing[key] = value;
+  }
+  const amounts = recipe.ingredients.map(ingredient => `${ingredient.amount} ${ingredient.name.toLowerCase()}${ingredient.grams ? ` (${ingredient.grams} g)` : ''}`);
+  const assumptions = [recipe.note,
+    `One batch: ${amounts.join(', ')}. Divided into ${recipe.servings} servings.`,
+    'USDA values come from the on-device copy; Silk is its printed label; the molasses is Golden Barrel\'s label (another brand of blackstrap is close but not identical).',
+    ...(recipe.sourceUrl ? [`Recipe: ${recipe.sourceUrl}`] : [])];
+  return {
+    id: `preset-recipe-${recipe.id}`,
+    presetGroup: 'recipe',
+    shortName: recipe.name,
+    type: 'recipe',
+    name: recipe.name,
+    servingLabel: recipe.servingLabel,
+    perServing,
+    provenance: sugar.provenance,
+    classification: 'composite',
+    glycemic: buildItemGlycemic({ perServing: flat, components: parts.map(part => ({ name: part.ingredient.name,
+      nutrients: { carbsG: part.values.carbsG / recipe.servings, fiberG: part.values.fiberG / recipe.servings },
+      gi: part.gi ?? matchGiEvidence({ name: part.ingredient.name }) })) }),
+    confidence: 'medium',
+    assumptions,
+    components: [],
+    favorite: false,
+    verified: true
+  };
+}
+
+export const PRESET_GROUPS = Object.freeze([...LABEL_GROUPS, { id: 'recipe', label: 'My recipes', items: RECIPES.map(buildRecipe) }]
+  .map(group => Object.freeze({ ...group, items: Object.freeze(group.items.map(item => Object.freeze(item))) })));
 
 export function findPreset(id) {
   for (const group of PRESET_GROUPS) {
