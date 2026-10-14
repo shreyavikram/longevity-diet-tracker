@@ -62,7 +62,14 @@ export function setupPwa({ navigatorRef = globalThis.navigator, windowRef = glob
       return Promise.resolve(event.prompt()).then(() => event.userChoice);
     },
     applyUpdate() {
-      if (!registration?.waiting) return false;
+      // The waiting version can take over on its own (iOS does this with the app in the background), leaving the
+      // banner up with nothing left to activate; a reload then picks up the version that is already running.
+      if (!registration?.waiting) {
+        if (!registration || didReload) return false;
+        didReload = true;
+        windowRef.location.reload();
+        return true;
+      }
       reloadOnChange = true;
       registration.waiting.postMessage({ type: 'SKIP_WAITING' });
       return true;

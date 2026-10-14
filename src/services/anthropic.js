@@ -63,6 +63,12 @@ function geminiText(payload) {
   };
 }
 
+// Gemini sometimes adds a nutrient the app does not track (vitamin C) or misspells a name ("vitaminClu").
+// The app could never store those, so they are dropped rather than failing the whole answer.
+function dropUntracked(nutrients, allowed) {
+  for (const key of Object.keys(nutrients)) if (!allowed.has(key)) delete nutrients[key];
+}
+
 function parseResponse(rawText) {
   const raw = String(rawText).trim();
   const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -109,8 +115,9 @@ function parseResponse(rawText) {
         || !Number.isFinite(component.productServings) || component.productServings <= 0 || component.productServings > 100))) throw bad('"productId" and "productServings" do not fit together');
     if (component.fallbackNutrients !== undefined) {
       if (!record(component.fallbackNutrients)) throw bad('"fallbackNutrients" is not an object');
-      const wrong = Object.entries(component.fallbackNutrients).find(([key, value]) => !FALLBACK_KEYS.has(key) || !Number.isFinite(value) || value < 0);
-      if (wrong) throw bad(`fallback nutrient ${quoted(wrong[0])} is ${FALLBACK_KEYS.has(wrong[0]) ? 'not a number of zero or more' : 'not allowed'}`);
+      dropUntracked(component.fallbackNutrients, FALLBACK_KEYS);
+      const wrong = Object.entries(component.fallbackNutrients).find(([, value]) => !Number.isFinite(value) || value < 0);
+      if (wrong) throw bad(`fallback nutrient ${quoted(wrong[0])} is not a number of zero or more`);
     }
   }
   if (parsed.totalServings !== undefined && (!Number.isFinite(parsed.totalServings)
@@ -118,8 +125,9 @@ function parseResponse(rawText) {
   for (const field of ['labelNutrients', 'statedNutrients']) {
     if (parsed[field] === undefined) continue;
     if (!record(parsed[field])) throw invalid(`${quoted(field)} is not an object`);
-    const wrong = Object.entries(parsed[field]).find(([key, value]) => !NUTRIENT_KEYS.has(key) || !Number.isFinite(value) || value < 0);
-    if (wrong) throw invalid(`${field} ${quoted(wrong[0])} is ${NUTRIENT_KEYS.has(wrong[0]) ? 'not a number of zero or more' : 'not allowed'}`);
+    dropUntracked(parsed[field], NUTRIENT_KEYS);
+    const wrong = Object.entries(parsed[field]).find(([, value]) => !Number.isFinite(value) || value < 0);
+    if (wrong) throw invalid(`${field} ${quoted(wrong[0])} is not a number of zero or more`);
   }
   if (parsed.labelComponentIndex !== undefined && !Number.isInteger(parsed.labelComponentIndex)) throw invalid('"labelComponentIndex" is not a whole number');
   return parsed;
