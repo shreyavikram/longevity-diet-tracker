@@ -23,6 +23,8 @@ const SOURCE_BY_NAME = Object.freeze({
   "Chik'n Strips": 'https://smartlabel.kelloggs.com/Product/Index/00028989101297'
 });
 const RETRIEVED_BY_GROUP = Object.freeze({ bar: '2026-10-10', morningstar: '2026-10-12' });
+// Silk Protein (her request, 2026-10-15) is typed from her photo of the carton's Nutrition Facts panel.
+const RETRIEVED_BY_NAME = Object.freeze({ 'Silk Protein Original Soymilk': '2026-10-15' });
 // Column order of each row after its name and serving: label units (vitamin D in mcg, omega-3 in g).
 const COLUMNS = ['calories', 'fatG', 'saturatedFatG', 'transFatG', 'sodiumMg', 'carbsG', 'fiberG', 'totalSugarG',
   'addedSugarG', 'proteinG', 'vitDMcg', 'ironMg', 'calciumMg', 'potassiumMg', 'b12Mcg', 'folateDfeMcg', 'magnesiumMg',
@@ -32,6 +34,7 @@ const ROWS = {
   silk: [
     ['Silk Organic Unsweet Soymilk', '1 cup (240 mL)', 80, 3.5, 0.5, 0, 80, 5, 2, 1, 0, 8, 3, 1, 280, 300, 2.4, 40, 35, null, 15, null, null, null],
     ['Silk Original Soymilk', '1 cup (240 mL)', 110, 4.5, 0.5, 0, 90, 8, 2, 5, 4, 8, 3, 1, 470, 370, 2.4, 40, 40, null, 15, null, null, null],
+    ['Silk Protein Original Soymilk', '1 cup (240 mL)', 130, 4.5, 0.5, 0, 200, 8, 3, 4, 3, 13, 3, 1, 470, 370, 2.4, 40, 45, null, 15, null, null, null],
   ],
   powder: [
     ['Chocolate', '2 scoops (90 g)', 400, 17, 3.5, 0, 400, 28, 11, 3, 3, 40, 4, 8.4, 390, 1320, 0.8, 81, 156, 57, 30, 5.9, 118, 5],
@@ -80,7 +83,7 @@ const ROWS = {
 };
 
 const GROUPS = Object.freeze([
-  { id: 'silk', label: 'Silk soymilk', name: name => name.includes('Unsweet') ? `${name} (green carton)` : `${name} (red carton)`,
+  { id: 'silk', label: 'Silk soymilk', name: name => `${name} (${name.includes('Unsweet') ? 'green' : name.includes('Protein') ? 'blue' : 'red'} carton)`,
     fluidMl: 240, classification: name => name.includes('Unsweet') ? 'unsweetenedSoy' : 'sweetenedDairySoy' },
   { id: 'powder', label: 'Huel Black Edition shakes (powder)', name: name => `Huel Black Edition ${name} shake`, fluidMl: 500,
     classification: () => 'composite', note: 'Made with 500 mL (about 2 cups) of water, as the label directs. Change the water amount if you mixed it with something else.' },
@@ -129,7 +132,7 @@ const GROUP_OF = Object.fromEntries(NUTRIENTS.map(definition => [definition.key,
 function buildItem(group, [rawName, servingLabel, ...values]) {
   const flat = {};
   const provenance = {};
-  const retrieved = RETRIEVED_BY_GROUP[group.id] ?? RETRIEVED;
+  const retrieved = RETRIEVED_BY_NAME[rawName] ?? RETRIEVED_BY_GROUP[group.id] ?? RETRIEVED;
   const sourceUrl = SOURCE_BY_NAME[rawName] ?? SOURCES[group.id];
   const record = { source: 'label', confidence: 'high', sourceUrl, retrievedAt: retrieved };
   COLUMNS.forEach((column, index) => {
