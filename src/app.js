@@ -710,7 +710,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       throw new TypeError('Use supplement completion instead of the food log');
     }
     const dayEntries = store.get('log')[action.date] ?? [];
-    const meal = mealIdentity(action.date, dayEntries, { mealId: action.mealId, mealType: action.mealType });
+    const meal = { ...mealIdentity(action.date, dayEntries, { mealId: action.mealId, mealType: action.mealType }),
+      ...(action.consumedAt ? { consumedAt: action.consumedAt } : {}) };
     const entry = {
       ...snapshotFromItem(item, servings),
       ...meal,
@@ -1828,6 +1829,18 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     updateDatedMap('log', correction.date, list => list.map(candidate => candidate.id === target.id ? replacement : candidate));
   }
 
+  // An inbox entry may name its meal (her request, 2026-10-22, after a backfilled weekend landed as one meal per
+  // day). It joins that day's meal of the same type, or starts one at a usual time for it, never the sync time.
+  const INBOX_MEAL_TIMES = { breakfast: '08:00', lunch: '12:30', snack: '15:30', dinner: '18:30', other: '12:00' };
+
+  function inboxMeal(date, mealType) {
+    if (mealType === undefined) return {};
+    if (!MEAL_TYPES.some(option => option.id === mealType)) throw new TypeError('Inbox meal type is invalid');
+    const existing = (store.get('log')[date] ?? []).find(entry => entry.mealId && entry.mealType === mealType);
+    return existing ? { mealId: existing.mealId, consumedAt: existing.consumedAt }
+      : { mealId: 'new', mealType, consumedAt: `${date}T${INBOX_MEAL_TIMES[mealType]}:00` };
+  }
+
   // Entries added from outside the app (for example by Claude) through the cloud inbox.
   function applyInboxEntry(entry) {
     if (entry?.kind === 'fill') return fillLogEntry(entry);
@@ -1836,12 +1849,14 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (!item || typeof item.name !== 'string' || !item.name.trim() || !LIBRARY_ITEM_TYPES.some(type => type.id === item.type)) {
       throw new TypeError('Inbox item is invalid');
     }
+    // Checked before anything is saved, so a file with an unknown meal type changes nothing and stays in the inbox.
+    const meal = entry.kind === 'log' ? inboxMeal(entry.date, entry.mealType) : {};
     const prepared = { ...clone(item), id: item.id || nextId('library'), perServing: clone(item.perServing ?? {}),
       provenance: clone(item.provenance ?? {}), servingLabel: String(item.servingLabel ?? '1 serving') };
     if (entry.kind === 'library' || prepared.favorite || prepared.type === 'supplement') saveLibraryItem(prepared);
     if (entry.kind === 'log') {
       if (prepared.type === 'supplement') toggleSupplement({ date: entry.date, itemId: prepared.id, completed: true });
-      else logItem({ date: entry.date, item: prepared, servings: entry.servings ?? 1 });
+      else logItem({ date: entry.date, item: prepared, servings: entry.servings ?? 1, ...meal });
     }
   }
 
