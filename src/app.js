@@ -1085,15 +1085,18 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
 
   function saveBodyMetric(entry) {
     assertDate(entry?.date);
-    if (!Number.isFinite(entry.weightKg) || entry.weightKg < 25 || entry.weightKg > 400) {
+    const hasWeight = entry.weightKg !== undefined && entry.weightKg !== null;
+    const hasWaist = entry.waistCm !== undefined && entry.waistCm !== null;
+    if (!hasWeight && !hasWaist) throw new RangeError('Enter a weight, a waist, or both');
+    if (hasWeight && (!Number.isFinite(entry.weightKg) || entry.weightKg < 25 || entry.weightKg > 400)) {
       throw new RangeError('Weight must be between 25 and 400 kg');
     }
-    if (entry.waistCm !== undefined && entry.waistCm !== null
-      && (!Number.isFinite(entry.waistCm) || entry.waistCm < 20 || entry.waistCm > 300)) {
+    if (hasWaist && (!Number.isFinite(entry.waistCm) || entry.waistCm < 20 || entry.waistCm > 300)) {
       throw new RangeError('Waist must be between 20 and 300 cm');
     }
-    const canonical = { date: entry.date, weightKg: entry.weightKg,
-      ...(entry.waistCm === undefined || entry.waistCm === null ? {} : { waistCm: entry.waistCm }) };
+    const canonical = { date: entry.date,
+      ...(hasWeight ? { weightKg: entry.weightKg } : {}),
+      ...(hasWaist ? { waistCm: entry.waistCm } : {}) };
     store.update('bodyMetrics', entries => [...entries.filter(item => item.date !== entry.date), canonical]
       .sort((left, right) => left.date.localeCompare(right.date)));
     refreshProgress();
@@ -1671,12 +1674,15 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         break;
       case 'save-body-metric': {
         const imperial = formData.get('units') === 'imperial';
-        const weight = formNumber(formData, 'weight');
-        const waistRaw = formData.get('waist');
-        const waist = waistRaw === null || String(waistRaw).trim() === '' ? null : formNumber(formData, 'waist');
+        const optionalNumber = name => {
+          const raw = formData.get(name);
+          return raw === null || String(raw).trim() === '' ? null : formNumber(formData, name);
+        };
+        const weight = optionalNumber('weight');
+        const waist = optionalNumber('waist');
         dispatch({ type: 'SAVE_BODY_METRIC', entry: {
           date: formData.get('date'),
-          weightKg: imperial ? clampImperialRoundTrip(lbToKg(weight), 25, 400) : weight,
+          ...(weight === null ? {} : { weightKg: imperial ? clampImperialRoundTrip(lbToKg(weight), 25, 400) : weight }),
           ...(waist === null ? {} : { waistCm: imperial ? clampImperialRoundTrip(inToCm(waist), 20, 300) : waist })
         } });
         break;

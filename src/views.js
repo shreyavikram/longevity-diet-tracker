@@ -853,9 +853,9 @@ export function renderProgress({ data, state, ui = {} }) {
   const entries = [...data.bodyMetrics].sort((a, b) => a.date.localeCompare(b.date));
   const current = entries.find(entry => entry.date === state.editingBodyMetricDate);
   const series = rollingWeightSeries(entries);
-  const waistSeries = series.filter(point => Number.isFinite(point.waistCm));
+  const waistSeries = entries.filter(point => Number.isFinite(point.waistCm));
   const date = current?.date ?? state.progressDate ?? state.selectedDate;
-  const weightValue = current ? chartValue(current.weightKg, units, 'weight') : '';
+  const weightValue = Number.isFinite(current?.weightKg) ? chartValue(current.weightKg, units, 'weight') : '';
   const waistValue = current?.waistCm === undefined ? '' : chartValue(current.waistCm, units, 'waist');
   const summaries = [7, 30].map(period => progressSummary(state.progressDate ?? state.selectedDate, data, period));
   const pending = data.recommendations.filter(item => item.status === 'pending');
@@ -863,17 +863,20 @@ export function renderProgress({ data, state, ui = {} }) {
   return `<section class="page progress-page" aria-labelledby="progress-title">
     <div class="page-heading"><div><span class="eyebrow">Your patterns</span><h1 id="progress-title">Progress</h1></div></div>
     <form class="card stack" data-action="save-body-metric">
-      <div><h2>${current ? 'Edit reading' : 'Add a reading'}</h2><p class="muted">One reading per local date. Weight is required; waist is optional.</p></div>
+      <div><h2>${current ? 'Edit reading' : 'Add a reading'}</h2><p class="muted">One reading per local date. Enter a weight, a waist, or both.</p></div>
       <div class="field-grid"><label>Date<input name="date" type="date" value="${escapeHtml(date)}" required${current ? ' readonly' : ''}></label>
-      <label>Weight (${imperial ? 'lb' : 'kg'})<input name="weight" type="number" min="${imperial ? format(kgToLb(25) - 0.000001, 6) : 25}" max="${imperial ? format(kgToLb(400) + 0.000001, 6) : 400}" step="${imperial ? 'any' : '0.01'}" inputmode="decimal" value="${weightValue === '' ? '' : format(weightValue, imperial ? 6 : 2)}" required></label>
-      <label>Waist (${imperial ? 'in' : 'cm'}), optional<input name="waist" type="number" min="${imperial ? format(cmToIn(20) - 0.000001, 6) : 20}" max="${imperial ? format(cmToIn(300) + 0.000001, 6) : 300}" step="${imperial ? 'any' : '0.01'}" inputmode="decimal" value="${waistValue === '' ? '' : format(waistValue, imperial ? 6 : 2)}"></label></div>
+      <label>Weight (${imperial ? 'lb' : 'kg'})<input name="weight" type="number" min="${imperial ? format(kgToLb(25) - 0.000001, 6) : 25}" max="${imperial ? format(kgToLb(400) + 0.000001, 6) : 400}" step="${imperial ? 'any' : '0.01'}" inputmode="decimal" value="${weightValue === '' ? '' : format(weightValue, imperial ? 6 : 2)}"></label>
+      <label>Waist (${imperial ? 'in' : 'cm'})<input name="waist" type="number" min="${imperial ? format(cmToIn(20) - 0.000001, 6) : 20}" max="${imperial ? format(cmToIn(300) + 0.000001, 6) : 300}" step="${imperial ? 'any' : '0.01'}" inputmode="decimal" value="${waistValue === '' ? '' : format(waistValue, imperial ? 6 : 2)}"></label></div>
       <input type="hidden" name="units" value="${escapeHtml(units)}">
       ${formNotice(ui, 'save-body-metric')}
       <div class="progress-actions"><button class="primary-button" type="submit">${current ? 'Save changes' : 'Save reading'}</button>${current ? '<button class="quiet-button" type="button" data-action="cancel-body-metric-edit">Cancel edit</button>' : ''}</div>
     </form>
     <section class="card stack" aria-labelledby="weight-heading"><div><h2 id="weight-heading">Weight trend</h2><p class="muted">Individual readings and the trailing 7-day mean. There is no fixed goal line.</p></div>${renderTrendChart(series, units, 'weight')}</section>
     ${waistSeries.length ? `<section class="card stack" aria-labelledby="waist-heading"><h2 id="waist-heading">Waist trend</h2>${renderTrendChart(waistSeries, units, 'waist')}</section>` : ''}
-    <section class="card stack" aria-labelledby="readings-heading"><h2 id="readings-heading">Readings</h2>${entries.length ? `<ul class="plain-list reading-list">${entries.slice().reverse().map(entry => `<li><span><strong>${escapeHtml(entry.date)}</strong><small>${format(chartValue(entry.weightKg, units, 'weight'), 1)} ${imperial ? 'lb' : 'kg'}${Number.isFinite(entry.waistCm) ? ` · waist ${format(chartValue(entry.waistCm, units, 'waist'), 1)} ${imperial ? 'in' : 'cm'}` : ''}</small></span><span class="reading-actions"><button class="quiet-button" type="button" data-action="edit-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Edit reading for ${escapeHtml(entry.date)}">Edit</button><button class="quiet-button" type="button" data-action="delete-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Delete reading for ${escapeHtml(entry.date)}">Delete</button></span></li>`).join('')}</ul>` : '<p class="muted">No readings yet.</p>'}</section>
+    <section class="card stack" aria-labelledby="readings-heading"><h2 id="readings-heading">Readings</h2>${entries.length ? `<ul class="plain-list reading-list">${entries.slice().reverse().map(entry => `<li><span><strong>${escapeHtml(entry.date)}</strong><small>${[
+      Number.isFinite(entry.weightKg) ? `${format(chartValue(entry.weightKg, units, 'weight'), 1)} ${imperial ? 'lb' : 'kg'}` : '',
+      Number.isFinite(entry.waistCm) ? `waist ${format(chartValue(entry.waistCm, units, 'waist'), 1)} ${imperial ? 'in' : 'cm'}` : ''
+    ].filter(Boolean).join(' · ')}</small></span><span class="reading-actions"><button class="quiet-button" type="button" data-action="edit-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Edit reading for ${escapeHtml(entry.date)}">Edit</button><button class="quiet-button" type="button" data-action="delete-body-metric" data-date="${escapeHtml(entry.date)}" aria-label="Delete reading for ${escapeHtml(entry.date)}">Delete</button></span></li>`).join('')}</ul>` : '<p class="muted">No readings yet.</p>'}</section>
     ${renderCoverage(data, state, state.progressDate ?? state.selectedDate)}
     ${summaries.map(summary => renderPeriodSummary(summary, data.settings.trackedNutrients)).join('')}
     <section class="card stack" aria-labelledby="recommendations-heading"><div><h2 id="recommendations-heading">Target recommendations</h2><p class="muted">Suggestions require consistent readings across two 14-day windows. Your targets change only when you accept.</p></div>
