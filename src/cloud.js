@@ -102,7 +102,8 @@ export function createCloudSync({ getConfig, exportData, hasHistory, importData,
     for (const file of files) {
       try {
         const entry = JSON.parse(await getText(file.path));
-        if (entry?.version !== 1) throw new Error('Unsupported inbox entry');
+        // Version 2 files name their meal (2026-10-22); an app from before that leaves them for a newer one.
+        if (entry?.version !== 1 && entry?.version !== 2) throw new Error('Unsupported inbox entry');
         applyInboxEntry(entry);
         await request('DELETE', file.path, { body: { message: `Applied ${file.name}`, sha: file.sha } });
         applied += 1;
