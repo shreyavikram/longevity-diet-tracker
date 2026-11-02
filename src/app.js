@@ -453,7 +453,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       computedTargets,
       effectiveTargets: resolveEffectiveTargets(data.targets),
       ui: { canUndoWater: (waterUndo.get(state.selectedDate)?.length ?? 0) > 0,
-        dataStatus: state.dataStatus, notice: state.notice, now: clock(), cloudStatus: state.cloudStatus, dayProgress: dayProgress(), ...pwaUi() }
+        dataStatus: state.dataStatus, notice: state.notice, now: clock(), cloudStatus: state.cloudStatus, dayProgress: dayProgress(),
+        checkingWorkouts: Boolean(state.checkingWorkouts), workoutsCheckNote: state.workoutsCheckNote ?? null, ...pwaUi() }
     });
     restoreFocus(focused);
     rememberDay();
@@ -1368,6 +1369,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (!VALID_ROUTES.has(route)) throw new Error(`Unknown route: ${route}`);
     if (analysisController || state.analysis) cancelAnalysis();
     state.route = route;
+    state.workoutsCheckNote = null;
     if (route === 'progress') state.progressDate = localDate(clock());
     state.dialog = null;
     state.draft = null;
@@ -1445,7 +1447,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         completed: control.dataset.completed === 'true'
       });
     }
-    if (control.dataset.action === 'check-workouts') return syncWorkouts();
+    if (control.dataset.action === 'check-workouts') return checkWorkouts();
     if (control.dataset.action === 'shift-selected-date') {
       dispatch({
         type: 'SET_SELECTED_DATE',
@@ -1930,6 +1932,23 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
   }
   // Opening the app, coming back to it, or reconnecting reads the sheet quietly; Check now reports failures.
   const syncWorkoutsQuietly = () => syncWorkouts().catch(() => {});
+
+  // Check now says it is checking and then what it found, so a check that changes nothing still visibly ran
+  // (she read an unchanged "checked 11:57 AM" as a broken button, 2026-11-02).
+  async function checkWorkouts() {
+    if (state.checkingWorkouts) return false;
+    state.checkingWorkouts = true;
+    state.workoutsCheckNote = null;
+    render();
+    try {
+      const changed = await syncWorkouts();
+      state.workoutsCheckNote = store.get('meta').workoutsError ? null : changed ? 'Workouts updated.' : 'No new workouts.';
+      return changed;
+    } finally {
+      state.checkingWorkouts = false;
+      render();
+    }
+  }
 
   function showError(error, event) {
     const formAction = event?.type === 'submit' ? event.target.closest?.('form[data-action]')?.dataset?.action : null;

@@ -392,6 +392,15 @@ function workoutStatusText(meta = {}) {
   return time ? `Workouts from Lift: checked ${time}` : 'Workouts from Lift: not checked yet';
 }
 
+// The workout status line and its Check now button, shared by Today and Settings.
+function workoutStatusLine(meta, ui = {}) {
+  return `${escapeHtml(workoutStatusText(meta))}${ui.workoutsCheckNote ? ` · ${escapeHtml(ui.workoutsCheckNote)}` : ''}`;
+}
+
+function checkWorkoutsButton(ui = {}) {
+  return `<button class="quiet-button" type="button" data-action="check-workouts"${ui.checkingWorkouts ? ' disabled>Checking…' : '>Check now'}</button>`;
+}
+
 function workoutMinutes(workout) {
   const minutes = workout.endedAt ? Math.round((Date.parse(workout.endedAt) - Date.parse(workout.startedAt)) / 60000) : NaN;
   return Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
@@ -422,7 +431,7 @@ function renderToday(data, state, ui = {}) {
   const unknownCount = onTrack.length - onTrackCount;
   return `<section class="page today-page stack" aria-labelledby="today-title">
     <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div></div>
-    <div class="workout-status"><p class="muted" data-region="workout-status">${escapeHtml(workoutStatusText(data.meta))}</p><button class="quiet-button" type="button" data-action="check-workouts">Check now</button></div>
+    <div class="workout-status"><p class="muted" data-region="workout-status">${workoutStatusLine(data.meta, ui)}</p>${checkWorkoutsButton(ui)}</div>
     ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${workoutMinutes(workout) !== null ? ` · ${workoutMinutes(workout)} min` : ''}`).join('; ')}</p>` : ''}
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
     <section class="stack today-goals" aria-labelledby="goals-heading"><h2 id="goals-heading" class="sr-only">Calories, protein, and water</h2>
@@ -977,7 +986,7 @@ export function renderSettings({ data, ui = {} }) {
       ${formNotice(ui, 'save-tracked-nutrients')}<button class="secondary-button" type="submit">Save nutrient list</button>
     </form>
     <section class="card stack" aria-labelledby="supplement-schedules"><div><h2 id="supplement-schedules">Supplement schedules</h2><p class="muted">Schedules are tracked separately from food.</p></div>${supplements.length ? `<ul class="plain-list">${supplements.map(item => `<li><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.schedule?.frequency ?? 'No schedule')}</span></li>`).join('')}</ul>` : '<p>No supplements saved yet.</p>'}<button class="secondary-button" type="button" data-action="navigate" data-route="library">Open library</button></section>
-    <form class="card stack" data-action="save-workout-settings"><div><h2>Workouts</h2><p class="muted">Lift sends each workout to a Google Sheet. Paste the sheet's Publish to web link (CSV).</p><p class="muted">${escapeHtml(workoutStatusText(meta))}</p></div><div class="field-grid"><label class="field-wide">Sheet link<input name="liftSheetUrl" type="url" value="${escapeHtml(settings.liftSheetUrl ?? '')}" required></label><label>Same-night amount (kcal)<input name="sameNightWorkoutKcal" type="number" min="0" max="500" step="5" value="${escapeHtml(settings.sameNightWorkoutKcal ?? 100)}" required></label></div>${formNotice(ui, 'save-workout-settings')}<div class="button-row"><button class="secondary-button" type="submit">Save workout settings</button><button class="quiet-button" type="button" data-action="check-workouts">Check now</button></div></form>
+    <form class="card stack" data-action="save-workout-settings"><div><h2>Workouts</h2><p class="muted">Lift sends each workout to a Google Sheet. Paste the sheet's Publish to web link (CSV).</p><p class="muted">${workoutStatusLine(meta, ui)}</p></div><div class="field-grid"><label class="field-wide">Sheet link<input name="liftSheetUrl" type="url" value="${escapeHtml(settings.liftSheetUrl ?? '')}" required></label><label>Same-night amount (kcal)<input name="sameNightWorkoutKcal" type="number" min="0" max="500" step="5" value="${escapeHtml(settings.sameNightWorkoutKcal ?? 100)}" required></label></div>${formNotice(ui, 'save-workout-settings')}<div class="button-row"><button class="secondary-button" type="submit">Save workout settings</button>${checkWorkoutsButton(ui)}</div></form>
     <form class="card stack" data-action="save-water-increments"><div><h2>Water increments</h2></div><div class="field-grid"><label>Glass (${waterUnit})<input name="waterGlass" type="number" min="1" step="0.1" value="${format(waterGlass, settings.units === 'imperial' ? 1 : 0)}"></label><label>Bottle (${waterUnit})<input name="waterBottle" type="number" min="1" step="0.1" value="${format(waterBottle, settings.units === 'imperial' ? 1 : 0)}"></label></div><input type="hidden" name="units" value="${settings.units}">${formNotice(ui, 'save-water-increments')}<button class="secondary-button" type="submit">Save water buttons</button></form>
     <form class="card stack" data-action="save-integrations"><div><h2>Analysis integrations</h2><p class="muted">Photo, label, recipe, and description analysis needs one AI key. Saved items, manual entry, and USDA search work without it. Keys are saved only in this browser and are left out of ordinary exports.</p></div>
       <label>AI service<select name="provider"><option value="gemini"${selected(provider, 'gemini')}>Google Gemini (free tier)</option><option value="anthropic"${selected(provider, 'anthropic')}>Anthropic Claude (paid)</option></select></label>
