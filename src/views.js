@@ -26,6 +26,7 @@ import { todayMetrics } from './today-metrics.js';
 import { analysisProvider } from './services/anthropic.js';
 import { drinkFluidMl } from './fluids.js';
 import { PRESET_GROUPS } from './presets.js';
+import { workoutDate } from './workout-energy.js';
 
 const DISCLAIMER = 'This app estimates nutrition and is not medical or dietetic advice. Targets are general references you can edit. Consult a qualified professional for personal medical or nutrition guidance.';
 
@@ -145,15 +146,12 @@ function renderProfileFields(profile, units, prefix, { showPreferences = false }
     <label>Average daily steps
       <input name="averageSteps" type="number" min="0" max="100000" step="100" value="${escapeHtml(profile.averageSteps)}">
     </label>
-    <label>Planned strength days
-      <input name="liftDaysPerWeek" type="number" min="0" max="6" step="1" value="${escapeHtml(profile.liftDaysPerWeek)}" required>
-    </label>
     <label class="field-wide">Activity estimate
       <select name="activityMultiplier">
-        <option value="1.2"${selected(profile.activityMultiplier, 1.2)}>Mostly sedentary</option>
-        <option value="1.35"${selected(profile.activityMultiplier, 1.35)}>Lightly active</option>
-        <option value="1.45"${selected(profile.activityMultiplier, 1.45)}>Active with regular training</option>
-        <option value="1.6"${selected(profile.activityMultiplier, 1.6)}>Very active</option>
+        <option value="1.2"${selected(profile.activityMultiplier, 1.2)}>Mostly sitting, under 5,000 steps</option>
+        <option value="1.3"${selected(profile.activityMultiplier, 1.3)}>Some walking, about 5,000 to 7,500 steps</option>
+        <option value="1.4"${selected(profile.activityMultiplier, 1.4)}>On your feet a lot, about 10,000 steps</option>
+        <option value="1.5"${selected(profile.activityMultiplier, 1.5)}>Physical job or 15,000+ steps</option>
       </select>
     </label>
     ${showPreferences ? `<label>Display units
@@ -203,14 +201,12 @@ export function renderInstallStatus(ui = {}) {
 export function renderTargetCards(targets, { showDerivation = true } = {}) {
   if (!targets) return '<p class="muted">Complete the profile to calculate a starting reference.</p>';
   return `<div class="metric-grid">
-    <article><span>Weekly average</span><strong>${format(targets.averageCalories)} kcal</strong></article>
-    <article><span>Training day</span><strong>${format(targets.trainingDayCalories)} kcal</strong></article>
-    <article><span>Rest day</span><strong>${format(targets.restDayCalories)} kcal</strong></article>
+    <article><span>Everyday target</span><strong>${format(targets.averageCalories)} kcal</strong></article>
     <article><span>Protein</span><strong>${format(targets.proteinG)} g</strong></article>
     <article><span>Fiber</span><strong>${format(targets.fiberG)} g</strong></article>
     <article><span>Water</span><strong>${format(targets.waterMl)} ml</strong></article>
   </div>
-  ${showDerivation ? `<p class="explanation">Based on an estimated ${format(targets.bmr)} kcal BMR and ${format(targets.maintenanceCalories)} kcal maintenance level. These are editable planning references, not guarantees.</p>` : ''}`;
+  ${showDerivation ? `<p class="explanation">Based on an estimated ${format(targets.bmr)} kcal BMR and ${format(targets.maintenanceCalories)} kcal for everyday life without workouts. Each workout from Lift adds its own estimate. These are editable planning references, not guarantees.</p>` : ''}`;
 }
 
 function renderEntryList(entries, data, selectedDate) {
@@ -356,6 +352,7 @@ function renderMetricBar(metric, { expanded = false, units = 'metric', variant =
   const detail = expanded ? `<div id="metric-${id}" class="metric-detail">
       <p>${escapeHtml(metric.meaning)}</p>
       <p class="muted">${escapeHtml(metric.targetNote)}</p>
+      ${metric.targetDetails?.length ? `<ul class="target-details">${metric.targetDetails.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>` : ''}
       ${contributors.length ? `<h3>Where it came from</h3><ul class="contributor-list">${contributors.map(item => `<li><span><strong>${escapeHtml(item.name)}</strong>${item.estimate ? ' <small class="estimate-tag">estimate</small>' : ''}</span><span>${escapeHtml(metricAmount(item.amount, metric.unit, units))}${metric.contributors.length > 1 ? ` · ${escapeHtml(format(item.share * 100))}%` : ''}</span>${item.parts.length ? `<ul class="part-list">${item.parts.slice(0, 5).map(part => `<li><span>${escapeHtml(part.name)}</span><span>${escapeHtml(metricAmount(part.amount, metric.unit, units))}</span></li>`).join('')}</ul>` : ''}</li>`).join('')}</ul>` : ''}
       ${metric.unknownCount ? `<p class="muted">${escapeHtml(plural(metric.unknownCount, 'food'))} ${metric.unknownCount === 1 ? 'does' : 'do'} not report this, so the total may be higher.</p>` : ''}
     </div>` : '';
@@ -387,15 +384,35 @@ function renderMealGroups(meals, data, selectedDate, openMeals = []) {
   }).join('');
 }
 
+// When workouts last arrived from Lift's published sheet, and why the latest read failed (2026-10-27).
+function workoutStatusText(meta = {}) {
+  const time = meta.workoutsCheckedAt
+    ? new Date(meta.workoutsCheckedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).replace(/\u202f/g, ' ') : null;
+  if (meta.workoutsError) return `Workouts from Lift: ${time ? `last checked ${time}` : 'not checked yet'} · ${meta.workoutsError}`;
+  return time ? `Workouts from Lift: checked ${time}` : 'Workouts from Lift: not checked yet';
+}
+
+function workoutMinutes(workout) {
+  const minutes = workout.endedAt ? Math.round((Date.parse(workout.endedAt) - Date.parse(workout.startedAt)) / 60000) : NaN;
+  return Number.isFinite(minutes) && minutes >= 0 ? minutes : null;
+}
+
+// The workout credits inside the day's calorie target, named the way she would say them.
+function renderCreditLine(credits, isToday) {
+  if (!credits?.length) return '';
+  const parts = credits.map(credit => credit.when === 'sameNight'
+    ? `+${format(credit.kcal)} from ${isToday ? "tonight's" : "that evening's"} ${credit.name}`
+    : `+${format(credit.kcal)} from ${isToday ? "last night's" : "the previous evening's"} ${credit.name}`);
+  return `<p class="muted credit-line">Includes ${escapeHtml(parts.join(' and '))}</p>`;
+}
+
 function renderToday(data, state, ui = {}) {
   const selectedDate = state.selectedDate;
   const daily = dailySummary(selectedDate, data);
   const units = data.settings.units;
-  const trainingDay = daily.trainingDay;
-  const workouts = Array.isArray(data.dayState[selectedDate]?.workouts) ? data.dayState[selectedDate].workouts : [];
-  const trainingControl = data.settings.trainingDayToggleEnabled
-    ? `<button class="quiet-button" type="button" data-action="toggle-training" aria-pressed="${trainingDay}">${trainingDay ? 'Training day' : 'Rest day'}</button>`
-    : '';
+  const now = ui.now ? new Date(ui.now) : null;
+  const isToday = Boolean(now) && selectedDate === `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const workouts = Object.values(data.workouts ?? {}).filter(workout => workoutDate(workout) === selectedDate);
   const { pinned, problems, onTrack, water } = todayMetrics(daily, { dayProgress: ui.dayProgress ?? 1 });
   const bar = (metric, variant = '') => renderMetricBar(metric, { expanded: state.expandedMetric === metric.id, units, variant });
   const [calories, ...otherPinned] = pinned;
@@ -404,11 +421,13 @@ function renderToday(data, state, ui = {}) {
   const onTrackCount = onTrack.filter(metric => metric.level === 'good').length;
   const unknownCount = onTrack.length - onTrackCount;
   return `<section class="page today-page stack" aria-labelledby="today-title">
-    <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div>${trainingControl}</div>
-    ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${Number.isFinite(workout.minutes) ? ` · ${escapeHtml(workout.minutes)} min` : ''}`).join('; ')}</p>` : ''}
+    <div class="today-heading"><div><span class="eyebrow">Selected day</span><h1 id="today-title">${escapeHtml(dateLabel(selectedDate))}</h1></div></div>
+    <div class="workout-status"><p class="muted" data-region="workout-status">${escapeHtml(workoutStatusText(data.meta))}</p><button class="quiet-button" type="button" data-action="check-workouts">Check now</button></div>
+    ${workouts.length ? `<p class="workout-line"><span class="eyebrow">From Lift</span>${workouts.map(workout => `${escapeHtml(workout.name)}${workoutMinutes(workout) !== null ? ` · ${workoutMinutes(workout)} min` : ''}`).join('; ')}</p>` : ''}
     <form class="date-picker" data-action="select-date"><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="-1" aria-label="Previous day">‹</button><label><span class="sr-only">Selected date</span><input name="selectedDate" type="date" value="${escapeHtml(selectedDate)}"></label><button class="quiet-button icon-button" type="button" data-action="shift-selected-date" data-days="1" aria-label="Next day">›</button></form>
     <section class="stack today-goals" aria-labelledby="goals-heading"><h2 id="goals-heading" class="sr-only">Calories, protein, and water</h2>
       ${calories ? bar(calories, 'hero') : ''}
+      ${renderCreditLine(daily.calorieCredits, isToday)}
       <div class="tile-pair">${otherPinned.map(metric => bar(metric, 'tile')).join('')}${water ? bar(water, 'tile') : ''}</div>
       ${water ? `<div class="water-actions"><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterGlassMl)}">+${escapeHtml(formatWater(data.settings.waterGlassMl, units))}</button><button class="secondary-button" type="button" data-action="add-water" data-ml="${escapeHtml(data.settings.waterBottleMl)}">+${escapeHtml(formatWater(data.settings.waterBottleMl, units))}</button><button class="quiet-button" type="button" data-action="undo-water"${ui.canUndoWater ? '' : ' disabled'}>Undo water</button></div>` : ''}
       <p class="muted bar-hint">The line marks your target. Tap a bar to see what it means and which foods it came from.</p></section>
@@ -958,7 +977,7 @@ export function renderSettings({ data, ui = {} }) {
       ${formNotice(ui, 'save-tracked-nutrients')}<button class="secondary-button" type="submit">Save nutrient list</button>
     </form>
     <section class="card stack" aria-labelledby="supplement-schedules"><div><h2 id="supplement-schedules">Supplement schedules</h2><p class="muted">Schedules are tracked separately from food.</p></div>${supplements.length ? `<ul class="plain-list">${supplements.map(item => `<li><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.schedule?.frequency ?? 'No schedule')}</span></li>`).join('')}</ul>` : '<p>No supplements saved yet.</p>'}<button class="secondary-button" type="button" data-action="navigate" data-route="library">Open library</button></section>
-    <form class="card stack" data-action="save-training-behavior"><div><h2>Training behavior</h2><p class="muted">Training-day calories stay within the weekly budget.</p><p class="muted">${meta.activitySyncedAt ? `Workouts from Lift last synced ${escapeHtml(new Date(meta.activitySyncedAt).toLocaleString('en-US', { month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}. Days with a Lift workout become training days unless you set the day yourself.` : 'Workouts from Lift have not synced yet. Days with a Lift workout become training days automatically.'}</p></div><label class="choice inline-choice"><input type="checkbox" name="trainingDayToggleEnabled"${checked(settings.trainingDayToggleEnabled)}><span>Show the training-day toggle</span></label>${formNotice(ui, 'save-training-behavior')}<button class="secondary-button" type="submit">Save training behavior</button></form>
+    <form class="card stack" data-action="save-workout-settings"><div><h2>Workouts</h2><p class="muted">Lift sends each workout to a Google Sheet. Paste the sheet's Publish to web link (CSV).</p><p class="muted">${escapeHtml(workoutStatusText(meta))}</p></div><div class="field-grid"><label class="field-wide">Sheet link<input name="liftSheetUrl" type="url" value="${escapeHtml(settings.liftSheetUrl ?? '')}" required></label><label>Same-night amount (kcal)<input name="sameNightWorkoutKcal" type="number" min="0" max="500" step="5" value="${escapeHtml(settings.sameNightWorkoutKcal ?? 100)}" required></label></div>${formNotice(ui, 'save-workout-settings')}<div class="button-row"><button class="secondary-button" type="submit">Save workout settings</button><button class="quiet-button" type="button" data-action="check-workouts">Check now</button></div></form>
     <form class="card stack" data-action="save-water-increments"><div><h2>Water increments</h2></div><div class="field-grid"><label>Glass (${waterUnit})<input name="waterGlass" type="number" min="1" step="0.1" value="${format(waterGlass, settings.units === 'imperial' ? 1 : 0)}"></label><label>Bottle (${waterUnit})<input name="waterBottle" type="number" min="1" step="0.1" value="${format(waterBottle, settings.units === 'imperial' ? 1 : 0)}"></label></div><input type="hidden" name="units" value="${settings.units}">${formNotice(ui, 'save-water-increments')}<button class="secondary-button" type="submit">Save water buttons</button></form>
     <form class="card stack" data-action="save-integrations"><div><h2>Analysis integrations</h2><p class="muted">Photo, label, recipe, and description analysis needs one AI key. Saved items, manual entry, and USDA search work without it. Keys are saved only in this browser and are left out of ordinary exports.</p></div>
       <label>AI service<select name="provider"><option value="gemini"${selected(provider, 'gemini')}>Google Gemini (free tier)</option><option value="anthropic"${selected(provider, 'anthropic')}>Anthropic Claude (paid)</option></select></label>

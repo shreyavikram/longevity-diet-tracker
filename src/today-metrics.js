@@ -185,6 +185,21 @@ function severity(entry) {
   return 1;
 }
 
+// How the day's calorie target was built (2026-10-27): the everyday target, then each Lift workout's credit
+// with the parts of its estimate.
+function workoutParts(parts) {
+  return parts.map(part => part.kind === 'lifting' ? `${part.sets} sets ≈ ${number(part.kcal)}`
+    : part.kind === 'cardio' ? `${part.km ? `${part.km} km` : `${part.minutes} min`} ${part.name} ≈ ${number(part.kcal)}`
+      : `${part.minutes} min ${part.kind === 'stretch' ? 'stretching' : 'holds'} ≈ ${number(part.kcal)}`).join(', ');
+}
+
+function calorieDetails(daily) {
+  if (!Number.isFinite(daily.baselineCalories)) return [];
+  return [`Everyday target: ${number(daily.baselineCalories)} kcal (no workouts).`,
+    ...(daily.calorieCredits ?? []).map(({ name, kcal, when, estimate }) =>
+      `${name}${Number.isFinite(estimate.minutes) ? `, ${estimate.minutes} min` : ''}: ${workoutParts(estimate.parts)} → ${number(estimate.kcal)} kcal; ${number(kcal)} ${when === 'sameNight' ? 'that night' : 'the next day'}.`)];
+}
+
 export function todayMetrics(daily, { dayProgress = 1 } = {}) {
   const t = daily?.targets;
   if (!t) return { pinned: [], problems: [], onTrack: [], water: null };
@@ -199,7 +214,7 @@ export function todayMetrics(daily, { dayProgress = 1 } = {}) {
     ? status('unknown', 'Unknown for some foods') : status(calorieStatus.level, calorieStatus.label);
   all.push(metric('calories', 'range', calories.value, calorieTarget, calories, calorieState,
     geometry(calories.value, calorieTarget.max, { min: calorieTarget.min }), t,
-    { targetNote: `85 to 105% of today's ${number(t.calories)} kcal target (${daily.trainingDay ? 'training' : 'rest'} day).` }));
+    { targetNote: `85 to 105% of today's ${number(t.calories)} kcal target.`, targetDetails: calorieDetails(daily) }));
 
   for (const [id, key, min, preferred] of [
     ['protein', 'proteinG', t.proteinG], ['fiber', 'fiberG', t.fiberMinG, t.fiberPreferredG],

@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const STORAGE_KEYS = Object.freeze([
   'profile',
@@ -10,6 +10,7 @@ export const STORAGE_KEYS = Object.freeze([
   'water',
   'dayState',
   'recommendations',
+  'workouts',
   'meta'
 ]);
 
@@ -121,9 +122,8 @@ export const DEFAULT_STATE = Object.freeze({
     age: 23,
     heightCm: 162.56,
     weightKg: 65.7708,
-    activityMultiplier: 1.45,
-    averageSteps: 5000,
-    liftDaysPerWeek: 3,
+    activityMultiplier: 1.4,
+    averageSteps: 10000,
     goal: 'fatLoss',
     pace: 'moderate'
   },
@@ -143,7 +143,9 @@ export const DEFAULT_STATE = Object.freeze({
     cloudRepo: 'shreyavikram/longevity-diet-data',
     cloudToken: '',
     model: 'claude-sonnet-5',
-    trainingDayToggleEnabled: true,
+    // Lift appends each workout to this sheet, published to the web as CSV (2026-10-27).
+    liftSheetUrl: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRZqEJFec6siaNWR57XJ58PgLXWj_ChWVW-EXPzaH6bWBO4eg2WCb-xSbb_s3dHrVbCbyVaeAy1r6Q4/pub?output=csv',
+    sameNightWorkoutKcal: 100,
     weekStartsMonday: true,
     trackedNutrients: [...DEFAULT_TRACKED_NUTRIENTS],
     waterGlassMl: 250,
@@ -156,6 +158,7 @@ export const DEFAULT_STATE = Object.freeze({
   water: {},
   dayState: {},
   recommendations: [],
+  workouts: {},
   meta: {
     schemaVersion: SCHEMA_VERSION,
     onboardingComplete: false,

@@ -1,6 +1,6 @@
 // The shell map is explicit so no user data, API traffic, or downloads enter Cache Storage.
 // CACHE_NAME is a content hash written by `npm run stamp`; `npm run verify` rejects a stale one.
-const CACHE_NAME = 'diet-tracker-shell-schema-v3-0a4a90c9809c';
+const CACHE_NAME = 'diet-tracker-shell-schema-v4-a787ab2e599d';
 const SHELL_PREFIX = 'diet-tracker-shell-';
 // Paths are relative to this worker's folder so the app can be hosted at a domain root or a subfolder.
 const SHELL_FILES = Object.freeze([
@@ -31,7 +31,8 @@ const SHELL_FILES = Object.freeze([
   './src/known-products.js',
   './src/trends.js',
   './src/pwa.js',
-  './src/activity.js',
+  './src/workout-energy.js',
+  './src/lift-sheet.js',
   './src/cloud.js',
   './src/services/usda-local.js',
   './data/usda-foods.json',

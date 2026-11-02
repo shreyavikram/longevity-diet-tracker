@@ -1,6 +1,7 @@
 // Cloud backup in a private GitHub repository, through the GitHub contents API.
 // tracker.json holds the full export (never API keys or the token), inbox/*.json holds entries added from
-// elsewhere (for example by Claude) that the app applies once and removes, and activity.json holds workouts.
+// elsewhere (for example by Claude) that the app applies once and removes. Lift workouts come from a published
+// Google Sheet instead (see lift-sheet.js).
 // The phone stays the source of truth: the cloud copy only restores a device that has no history yet.
 const API = 'https://api.github.com';
 
@@ -28,13 +29,18 @@ function comparable(text) {
   try {
     const payload = JSON.parse(text);
     delete payload.exportedAt;
+    // Checking the Lift sheet changes nothing worth a backup unless the workouts themselves change.
+    if (payload.meta && typeof payload.meta === 'object') {
+      delete payload.meta.workoutsCheckedAt;
+      delete payload.meta.workoutsError;
+    }
     return JSON.stringify(payload);
   } catch {
     return text;
   }
 }
 
-export function createCloudSync({ getConfig, exportData, hasHistory, importData, applyInboxEntry, applyActivity,
+export function createCloudSync({ getConfig, exportData, hasHistory, importData, applyInboxEntry,
   fetchFn = globalThis.fetch, onStatus = () => {}, now = () => new Date() }) {
   let lastPushed = null;
   let running = Promise.resolve();
@@ -115,12 +121,6 @@ export function createCloudSync({ getConfig, exportData, hasHistory, importData,
     return { applied, failed };
   }
 
-  async function readActivity() {
-    const text = await getText('activity.json');
-    if (!text) return;
-    try { applyActivity(JSON.parse(text)); } catch { /* A malformed workout file is ignored; the next sync retries. */ }
-  }
-
   function describe(error) {
     if (error instanceof CloudError) return error.message;
     return 'Cloud backup is waiting for a connection.';
@@ -137,7 +137,6 @@ export function createCloudSync({ getConfig, exportData, hasHistory, importData,
       try {
         const restored = await restoreIfEmpty();
         const { applied, failed } = await readInbox();
-        await readActivity();
         await push();
         const parts = [`Backed up ${now().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}.`];
         if (restored) parts.push('History restored from the cloud.');

@@ -2,50 +2,50 @@ import { CARDIOMETABOLIC_TARGET_DEFAULTS, NUTRIENTS } from './constants.js';
 import { cardiometabolicDay } from './cardiometabolic.js';
 import { calculateMealMetrics, groupMealEntries } from './meals.js';
 import { entryFluidMl } from './fluids.js';
+import { workoutCredits, workoutDate } from './workout-energy.js';
 
 const DEFICIT_BY_PACE = Object.freeze({ gentle: 0.1, moderate: 0.175, faster: 0.25 });
 const round25 = value => Math.round(value / 25) * 25;
 
-export function computeTargets(profile) {
+// The everyday calorie target: maintenance for everyday life without workouts (the activity level describes only
+// that, since 2026-10-27), less the pace deficit, never below BMR. Workouts add their own estimates on top.
+export function calorieBaseline(profile, weightKg = profile.weightKg) {
   const sexOffset = profile.sexForBmr === 'male' ? 5 : -161;
-  const rawBmr = 10 * profile.weightKg + 6.25 * profile.heightCm - 5 * profile.age + sexOffset;
+  const rawBmr = 10 * weightKg + 6.25 * profile.heightCm - 5 * profile.age + sexOffset;
   const bmr = round25(rawBmr);
   const maintenanceCalories = round25(rawBmr * profile.activityMultiplier);
   const unboundedAverage = round25(maintenanceCalories * (1 - DEFICIT_BY_PACE[profile.pace]));
   const averageCalories = Math.max(bmr, unboundedAverage);
-  const clampedToBmr = averageCalories === bmr && unboundedAverage < bmr;
-  const plannedTrainingDays = Math.max(0, Math.min(6, Math.round(profile.liftDaysPerWeek)));
-  let trainingDayCalories = averageCalories;
-  let restDayCalories = averageCalories;
-  if (!clampedToBmr && plannedTrainingDays > 0) {
-    const trainingBoost = round25(Math.min(150, averageCalories * 0.06));
-    trainingDayCalories = averageCalories + trainingBoost;
-    restDayCalories = round25(
-      (averageCalories * 7 - trainingDayCalories * plannedTrainingDays) /
-      (7 - plannedTrainingDays)
-    );
-    if (restDayCalories < bmr) {
-      trainingDayCalories = averageCalories;
-      restDayCalories = averageCalories;
-    }
+  return { bmr, maintenanceCalories, averageCalories, clampedToBmr: averageCalories === bmr && unboundedAverage < bmr };
+}
+
+// The latest weigh-in on or before the date, else the profile weight (her request, 2026-10-27).
+export function weightOnDate(bodyMetrics, date, fallbackKg) {
+  let latest = null;
+  for (const reading of bodyMetrics ?? []) {
+    if (reading?.date <= date && Number.isFinite(reading.weightKg) && reading.weightKg > 0 && (!latest || reading.date >= latest.date)) latest = reading;
   }
+  return latest ? latest.weightKg : fallbackKg;
+}
+
+// Calorie numbers at the given weight (her latest weigh-in, when the caller has one); protein and water keep the
+// profile weight.
+export function computeTargets(profile, weightKg = profile.weightKg) {
+  const { bmr, maintenanceCalories, averageCalories, clampedToBmr } = calorieBaseline(profile, weightKg);
   const waterMl = Math.round(profile.weightKg * 35 / 100) * 100;
   return {
     pace: profile.pace,
-    plannedTrainingDays,
     deficitPercent: DEFICIT_BY_PACE[profile.pace] * 100,
     bmr,
     maintenanceCalories,
     averageCalories,
-    trainingDayCalories,
-    restDayCalories,
     weeklyCalories: averageCalories * 7,
     clampedToBmr,
     proteinG: Math.round(profile.weightKg * 2 / 5) * 5,
     fiberG: CARDIOMETABOLIC_TARGET_DEFAULTS.fiberMinG,
     ...CARDIOMETABOLIC_TARGET_DEFAULTS,
     waterMl,
-    trainingDayWaterMl: waterMl + 500,
+    workoutDayWaterMl: waterMl + 500,
     carbsG: null,
     fatG: null
   };
@@ -58,21 +58,7 @@ export function resolveEffectiveTargets(targets) {
   const overrides = targets.overrides ?? {};
   const effective = { ...computed };
   if (Number.isFinite(overrides.averageCalories)) {
-    const plannedTrainingDays = Number.isInteger(computed.plannedTrainingDays)
-      ? computed.plannedTrainingDays
-      : computed.trainingDayCalories === computed.restDayCalories ? 0
-        : Math.round((computed.weeklyCalories - computed.restDayCalories * 7)
-          / (computed.trainingDayCalories - computed.restDayCalories));
-    const days = Math.max(0, Math.min(6, plannedTrainingDays));
-    const desiredBoost = Math.max(0, computed.trainingDayCalories - computed.averageCalories);
-    const maxBoost = days ? Math.max(0, (overrides.averageCalories - computed.bmr) * (7 - days) / days) : 0;
-    let boost = desiredBoost > maxBoost ? 0 : Math.floor(desiredBoost);
-    while (boost > 0 && boost * days % (7 - days) !== 0) boost -= 1;
     effective.averageCalories = overrides.averageCalories;
-    effective.trainingDayCalories = overrides.averageCalories + boost;
-    effective.restDayCalories = days
-      ? (overrides.averageCalories * 7 - effective.trainingDayCalories * days) / (7 - days)
-      : overrides.averageCalories;
     effective.weeklyCalories = overrides.averageCalories * 7;
   }
   for (const [key, value] of Object.entries(overrides)) {
@@ -82,15 +68,15 @@ export function resolveEffectiveTargets(targets) {
   return effective;
 }
 
-export function computeDayTargets(targets, trainingDay) {
+// One day's targets for the calories that day earns: the everyday target plus its workout credits.
+export function computeDayTargets(targets, { calories, workoutDay = false } = {}) {
   const effective = { ...CARDIOMETABOLIC_TARGET_DEFAULTS, ...(targets?.computed ? resolveEffectiveTargets(targets) : targets) };
-  const calories = trainingDay ? effective.trainingDayCalories : effective.restDayCalories;
   // Carbohydrate and fat ranges follow the day's calorie target (4 and 9 kcal per gram).
   const grams = (percent, perGram) => Math.round(calories * percent / 100 / perGram);
   return {
     ...effective,
     calories,
-    waterMl: trainingDay ? effective.trainingDayWaterMl : effective.waterMl,
+    waterMl: workoutDay ? effective.workoutDayWaterMl : effective.waterMl,
     carbsMinG: grams(effective.carbsPercentMin, 4),
     carbsMaxG: grams(effective.carbsPercentMax, 4),
     fatMinG: grams(effective.fatPercentMin, 9),
@@ -342,9 +328,17 @@ function detailFor(items, definition, targets, calorieTarget, date) {
 export function dailySummary(date, stores) {
   assertLocalDate(date);
   const data = summaryData(stores);
-  const trainingDay = Boolean(data.dayState?.[date]?.trainingDay);
   const effectiveTargets = resolveEffectiveTargets(data.targets);
-  const targets = effectiveTargets ? computeDayTargets(data.targets, trainingDay) : null;
+  // Workouts earn their own calories (2026-10-27): part on their own evening, the rest the next day.
+  const profile = data.profile ?? {};
+  const weightKgOn = day => weightOnDate(data.bodyMetrics, day, profile.weightKg);
+  const workouts = Object.values(data.workouts ?? {});
+  const credits = workoutCredits(workouts, date, { sameNightKcal: data.settings?.sameNightWorkoutKcal ?? 100, weightKgOn });
+  const workoutDay = workouts.some(workout => workoutDate(workout) === date);
+  const baselineCalories = !effectiveTargets ? null
+    : Number.isFinite(data.targets.overrides?.averageCalories) ? data.targets.overrides.averageCalories
+      : calorieBaseline(profile, weightKgOn(date)).averageCalories;
+  const targets = effectiveTargets ? computeDayTargets(data.targets, { calories: baselineCalories + credits.total, workoutDay }) : null;
   const items = summaryItems(data, date);
   // Drinks logged as food also count toward water (see fluids.js).
   const drinks = (data.log?.[date] ?? [])
@@ -374,7 +368,9 @@ export function dailySummary(date, stores) {
     ...group, metrics: group.mealId ? calculateMealMetrics(group.entries, targets?.fiberCarbRatioDenominatorMax ?? 10) : null }));
   return {
     date,
-    trainingDay,
+    workoutDay,
+    baselineCalories,
+    calorieCredits: credits.items,
     targets,
     nutrients,
     waterMl: data.water?.[date] ?? 0,
@@ -391,8 +387,7 @@ export function dailySummary(date, stores) {
   };
 }
 
-function weeklyDefinition(definition, effectiveTargets) {
-  const calorieTarget = effectiveTargets?.weeklyCalories;
+function weeklyDefinition(definition, effectiveTargets, calorieTarget) {
   const adjusted = effectiveDefinition(definition, effectiveTargets, calorieTarget);
   if (Number.isFinite(adjusted.targetMin)) adjusted.targetMin *= 7;
   if (Number.isFinite(adjusted.targetPreferred)) adjusted.targetPreferred *= 7;
@@ -412,9 +407,12 @@ export function weeklyCoverage(endDate, stores) {
   const dates = Array.from({ length: 7 }, (_, index) => addDays(endDate, index - 6));
   const days = dates.map(date => dailySummary(date, data));
   const effectiveTargets = resolveEffectiveTargets(data.targets);
+  // The week's calorie budget is the sum of its day targets, workout credits included.
+  const caloriesTarget = days.every(day => Number.isFinite(day.targets?.calories))
+    ? days.reduce((sum, day) => sum + day.targets.calories, 0) : null;
   const nutrients = {};
   for (const definition of NUTRIENTS) {
-    const adjusted = weeklyDefinition(definition, effectiveTargets);
+    const adjusted = weeklyDefinition(definition, effectiveTargets, caloriesTarget);
     const contributors = days.flatMap(day => day.details[definition.id].contributors);
     const unknownItems = days.flatMap(day => day.details[definition.id].unknownItems);
     const total = contributors.length
@@ -460,7 +458,6 @@ export function weeklyCoverage(endDate, stores) {
   const caloriesTotal = days.reduce((sum, day) => sum + (day.nutrients.calories ?? 0), 0);
   const calorieUnknownItems = days.flatMap(day => day.calories.unknownItems);
   const caloriesComplete = calorieUnknownItems.length === 0;
-  const caloriesTarget = effectiveTargets?.weeklyCalories ?? null;
   return {
     startDate: dates[0],
     endDate,

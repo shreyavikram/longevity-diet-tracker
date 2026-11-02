@@ -10,6 +10,7 @@ import {
 } from './constants.js';
 import {
   computeTargets,
+  weightOnDate,
   flOzToMl,
   inToCm,
   lbToKg,
@@ -31,7 +32,7 @@ import { knownProducts } from './known-products.js';
 import { analysisProvider, DEFAULT_GEMINI_MODEL } from './services/anthropic.js';
 import { buildAdjustmentRecommendation } from './trends.js';
 import { setupPwa } from './pwa.js';
-import { mergeActivity, parseActivity } from './activity.js';
+import { parseLiftSheet } from './lift-sheet.js';
 import { createCloudSync } from './cloud.js';
 import { createLocalFoodSearch } from './services/usda-local.js';
 import { findPreset } from './presets.js';
@@ -45,7 +46,7 @@ const SAVED_MESSAGES = Object.freeze({
   'save-target-overrides': 'Target overrides saved.',
   'set-units': 'Units saved.',
   'save-tracked-nutrients': 'Nutrient list saved.',
-  'save-training-behavior': 'Training behavior saved.',
+  'save-workout-settings': 'Workout settings saved.',
   'save-water-increments': 'Water buttons saved.',
   'save-integrations': 'Integrations saved.',
   'save-body-metric': 'Reading saved.',
@@ -110,7 +111,6 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
     weightKg: units === 'metric' ? enteredWeight : lbToKg(enteredWeight),
     activityMultiplier: formNumber(formData, 'activityMultiplier'),
     averageSteps: formNumber(formData, 'averageSteps'),
-    liftDaysPerWeek: formNumber(formData, 'liftDaysPerWeek'),
     goal: formData.get('goal') === 'fatLoss' ? 'fatLoss' : existing.goal,
     pace: ['gentle', 'moderate', 'faster'].includes(formData.get('pace')) ? formData.get('pace') : existing.pace
   };
@@ -118,7 +118,7 @@ function profileFromForm(formData, existing, displayUnits = formData.get('units'
 
 export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new Date(), documentRef = globalThis.document,
   cryptoRef = globalThis.crypto, dayMemory = globalThis.localStorage, confirmFn = message => globalThis.confirm?.(message) ?? false,
-  pwaFactory = setupPwa, activityFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, recognizeText = createTextRecognizer({ documentRef }), activityUrl = './activity.json', downloadFn = (name, contents) => {
+  pwaFactory = setupPwa, workoutsFetch = globalThis.fetch, cloudFetch = globalThis.fetch, localFoodsFetch = globalThis.fetch, recognizeText = createTextRecognizer({ documentRef }), downloadFn = (name, contents) => {
     const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
     const link = documentRef.createElement('a');
     link.href = url;
@@ -446,7 +446,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (!root) return;
     const focused = focusSelector(documentRef?.activeElement);
     const data = store.loadAll();
-    const computedTargets = data.targets.computed ?? computeTargets(data.profile);
+    const computedTargets = data.targets.computed ?? currentTargets(data.profile);
     root.innerHTML = renderApp({
       state,
       data,
@@ -540,9 +540,19 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     if (kept.length !== library.length) store.set('library', kept);
   }
 
+  // The everyday calorie target follows her latest weigh-in (2026-10-27); protein and water keep the profile weight.
+  function currentTargets(profile) {
+    return computeTargets(profile, weightOnDate(store.get('bodyMetrics'), localDate(clock()), profile.weightKg));
+  }
+
+  function refreshComputedTargets() {
+    store.update('targets', targets => targets.autoCompute === false || !targets.computed ? targets
+      : { ...targets, computed: currentTargets(store.get('profile')) });
+  }
+
   function completeOnboarding(action) {
     const profile = clone(action.profile);
-    const computed = computeTargets(profile);
+    const computed = currentTargets(profile);
     store.set('profile', profile);
     store.set('targets', { autoCompute: true, computed, overrides: clone(action.overrides ?? {}) });
     store.update('settings', settings => ({
@@ -1145,7 +1155,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         store.set('profile', profile);
         store.update('targets', targets => ({
           ...targets,
-          computed: targets.autoCompute === false ? targets.computed : computeTargets(profile)
+          computed: targets.autoCompute === false ? targets.computed : currentTargets(profile)
         }));
         break;
       }
@@ -1155,9 +1165,18 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'SET_TRACKED_NUTRIENTS':
         store.update('settings', settings => ({ ...settings, trackedNutrients: [...new Set(action.ids ?? [])] }));
         break;
-      case 'SET_TRAINING_BEHAVIOR':
-        store.update('settings', settings => ({ ...settings, trainingDayToggleEnabled: Boolean(action.enabled) }));
+      case 'SET_WORKOUT_SETTINGS': {
+        const liftSheetUrl = String(action.liftSheetUrl ?? '').trim();
+        if (!liftSheetUrl.startsWith('https://docs.google.com/spreadsheets/')) {
+          throw new TypeError("Paste the sheet's Publish to web link (it starts with https://docs.google.com/spreadsheets/).");
+        }
+        const sameNightWorkoutKcal = Number(action.sameNightWorkoutKcal);
+        if (!Number.isInteger(sameNightWorkoutKcal) || sameNightWorkoutKcal < 0 || sameNightWorkoutKcal > 500) {
+          throw new RangeError('Same-night amount must be between 0 and 500 kcal.');
+        }
+        store.update('settings', settings => ({ ...settings, liftSheetUrl, sameNightWorkoutKcal }));
         break;
+      }
       case 'SET_WATER_INCREMENTS':
         store.update('settings', settings => ({
           ...settings,
@@ -1297,11 +1316,10 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         }
         break;
       }
-      case 'SET_TRAINING_DAY':
-        updateDatedMap('dayState', action.date, day => ({ ...(day ?? {}), trainingDay: Boolean(action.trainingDay), trainingSource: 'manual' }));
         break;
       case 'SAVE_BODY_METRIC':
         saveBodyMetric(action.entry);
+        refreshComputedTargets();
         state.editingBodyMetricDate = null;
         break;
       case 'EDIT_BODY_METRIC':
@@ -1314,6 +1332,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'DELETE_BODY_METRIC':
         assertDate(action.date);
         store.update('bodyMetrics', entries => entries.filter(entry => entry.date !== action.date));
+        refreshComputedTargets();
         if (state.editingBodyMetricDate === action.date) state.editingBodyMetricDate = null;
         refreshProgress();
         break;
@@ -1426,10 +1445,7 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
         completed: control.dataset.completed === 'true'
       });
     }
-    if (control.dataset.action === 'toggle-training') {
-      const current = store.get('dayState')[state.selectedDate]?.trainingDay ?? false;
-      dispatch({ type: 'SET_TRAINING_DAY', date: state.selectedDate, trainingDay: !current });
-    }
+    if (control.dataset.action === 'check-workouts') return syncWorkouts();
     if (control.dataset.action === 'shift-selected-date') {
       dispatch({
         type: 'SET_SELECTED_DATE',
@@ -1639,8 +1655,8 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       case 'save-tracked-nutrients':
         dispatch({ type: 'SET_TRACKED_NUTRIENTS', ids: formData.getAll('trackedNutrients') });
         break;
-      case 'save-training-behavior':
-        dispatch({ type: 'SET_TRAINING_BEHAVIOR', enabled: formData.has('trainingDayToggleEnabled') });
+      case 'save-workout-settings':
+        dispatch({ type: 'SET_WORKOUT_SETTINGS', liftSheetUrl: formData.get('liftSheetUrl'), sameNightWorkoutKcal: Number(formData.get('sameNightWorkoutKcal')) });
         break;
       case 'save-water-increments': {
         const imperial = formData.get('units') === 'imperial';
@@ -1759,18 +1775,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName));
   }
 
-  // Workout days published from Lift arrive in the background; like update notices, they never
-  // redraw while something is being edited. The next render shows them.
-  function applyActivityPayload(activity) {
-    if (!activity) return false;
-    const { dayState, changed } = mergeActivity(store.get('dayState'), activity);
-    if (changed) store.set('dayState', dayState);
-    if (store.get('meta').activitySyncedAt !== activity.generatedAt) {
-      store.update('meta', meta => ({ ...meta, activitySyncedAt: activity.generatedAt }));
-    }
-    return changed;
-  }
-
   // A "fill" from the inbox backfills a past log entry with estimates (her request, 2026-09-28): only nutrients
   // that were unknown, or partial totals missing some ingredients, change. Known values stay exactly as logged.
   const MICRO_KEYS = new Set(NUTRIENTS.filter(definition => definition.group === 'micros').map(definition => definition.key));
@@ -1878,7 +1882,6 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       ensureSetup();
     },
     applyInboxEntry,
-    applyActivity: payload => applyActivityPayload(parseActivity(JSON.stringify(payload))),
     fetchFn: cloudFetch,
     onStatus: (text, { ok } = {}) => {
       state.cloudStatus = text;
@@ -1895,23 +1898,38 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     pushTimer = setTimeout(() => cloud.push(), 4000);
   }
 
-  async function syncActivity() {
-    try {
-      const response = await activityFetch(activityUrl, { cache: 'no-store' });
-      if (!response?.ok) return false;
-      const activity = parseActivity(await response.text());
-      if (!activity) return false;
-      const { dayState, changed } = mergeActivity(store.get('dayState'), activity);
-      if (changed) store.set('dayState', dayState);
-      if (store.get('meta').activitySyncedAt !== activity.generatedAt) {
-        store.update('meta', meta => ({ ...meta, activitySyncedAt: activity.generatedAt }));
+  // Lift appends each workout to a Google Sheet she published to the web (2026-10-27). Workouts arrive in the
+  // background and, like update notices, never redraw while something is being edited. A failed read keeps the
+  // last workouts and says why.
+  async function syncWorkouts() {
+    const url = store.get('settings').liftSheetUrl;
+    let error = null;
+    let changed = false;
+    let text = null;
+    if (!url) error = 'Add the sheet link in Settings → Workouts.';
+    else {
+      try {
+        // Google caches a published sheet for up to five minutes; the query parameter asks for a fresh copy.
+        const response = await workoutsFetch(`${url}${url.includes('?') ? '&' : '?'}t=${clock().getTime()}`, { cache: 'no-store' });
+        if (response?.ok) text = await response.text();
+        else error = `The workout sheet answered ${response?.status}. Check that it is still published to the web.`;
+      } catch {
+        error = 'No connection. Workouts will update when you are back online.';
       }
-      if (!isEditing()) render();
-      return changed;
-    } catch {
-      return false;
     }
+    const sheet = text === null ? null : parseLiftSheet(text);
+    if (text !== null && !sheet) error = 'The workout sheet link does not show Lift workouts. Check the link in Settings → Workouts.';
+    // A storage error is not a connection problem: it throws, and Check now shows the storage message.
+    if (sheet && JSON.stringify(sheet.workouts) !== JSON.stringify(store.get('workouts'))) {
+      store.set('workouts', sheet.workouts);
+      changed = true;
+    }
+    store.update('meta', meta => ({ ...meta, ...(error ? {} : { workoutsCheckedAt: clock().toISOString() }), workoutsError: error }));
+    if (!isEditing()) render();
+    return changed;
   }
+  // Opening the app, coming back to it, or reconnecting reads the sheet quietly; Check now reports failures.
+  const syncWorkoutsQuietly = () => syncWorkouts().catch(() => {});
 
   function showError(error, event) {
     const formAction = event?.type === 'submit' ? event.target.closest?.('form[data-action]')?.dataset?.action : null;
@@ -1951,18 +1969,18 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
       applyUpdateWhenIdle();
       documentRef?.addEventListener?.('visibilitychange', () => {
         if (documentRef.visibilityState === 'visible') {
-          syncActivity();
+          syncWorkoutsQuietly();
           cloud.syncNow();
         } else cloud.push();
       });
-      documentRef?.defaultView?.addEventListener?.('online', () => { syncActivity(); cloud.syncNow(); });
+      documentRef?.defaultView?.addEventListener?.('online', () => { syncWorkoutsQuietly(); cloud.syncNow(); });
     }
     render();
-    syncActivity();
+    syncWorkoutsQuietly();
     cloud.syncNow();
   }
 
-  return { start, navigate, getState: () => clone(state), dispatch, syncActivity, syncCloud: () => cloud.syncNow() };
+  return { start, navigate, getState: () => clone(state), dispatch, syncWorkouts, syncCloud: () => cloud.syncNow() };
 }
 
 if (typeof document !== 'undefined' && typeof localStorage !== 'undefined') {

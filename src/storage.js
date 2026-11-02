@@ -1,3 +1,4 @@
+import { computeTargets, weightOnDate } from './calculations.js';
 import { DEFAULT_STATE, SCHEMA_VERSION, STORAGE_KEYS } from './constants.js';
 
 const clone = value => structuredClone(value);
@@ -36,7 +37,6 @@ function validateProfile(value) {
   assertFiniteNumber(value.heightCm, 'profile.heightCm', { min: 100, max: 250 });
   assertFiniteNumber(value.weightKg, 'profile.weightKg', { min: 25, max: 400 });
   assertFiniteNumber(value.activityMultiplier, 'profile.activityMultiplier', { min: 1.1, max: 2.2 });
-  assertFiniteNumber(value.liftDaysPerWeek, 'profile.liftDaysPerWeek', { min: 0, max: 6 });
   if (!['gentle', 'moderate', 'faster'].includes(value.pace)) {
     throw new StorageValidationError('profile.pace is invalid');
   }
@@ -65,6 +65,10 @@ function validate(key, value) {
     assertFiniteNumber(amount, path, { min: 0, max: 100000 });
   });
   if (key === 'dayState') validateDateMap(value, key, (day, path) => assertRecord(day, path));
+  if (key === 'workouts') {
+    assertRecord(value, key);
+    for (const [id, workout] of Object.entries(value)) assertRecord(workout, `${key}.${id}`);
+  }
   return value;
 }
 
@@ -124,6 +128,39 @@ function migrate(payload, now) {
       migrations: [
         ...((Array.isArray(next.meta?.migrations) && next.meta.migrations) || []),
         { from: currentVersion, to: 3, at: now().toISOString() }
+      ]
+    };
+    currentVersion = 3;
+  }
+  if (currentVersion < 4) {
+    // Workouts earn their own calories (her request, 2026-10-27): the activity level now describes everyday life
+    // without workouts, Lift workouts arrive from a published sheet, and the training-day split is gone. Her 1.45
+    // ("active with regular training") stood for about 10,000 steps a day plus lifting (her correction, 2026-10-28).
+    const everydayLevel = new Map([[1.2, 1.2], [1.35, 1.3], [1.45, 1.4], [1.6, 1.5]]);
+    if (isRecord(next.profile)) {
+      const { liftDaysPerWeek, ...profile } = next.profile;
+      if (profile.activityMultiplier === 1.45) profile.averageSteps = 10000;
+      if (everydayLevel.has(profile.activityMultiplier)) profile.activityMultiplier = everydayLevel.get(profile.activityMultiplier);
+      next.profile = profile;
+    }
+    const { trainingDayToggleEnabled, ...settings } = { ...clone(DEFAULT_STATE.settings), ...(isRecord(next.settings) ? next.settings : {}) };
+    next.settings = settings;
+    if (isRecord(next.targets?.computed)) {
+      const { plannedTrainingDays, trainingDayCalories, restDayCalories, trainingDayWaterMl, ...computed } = next.targets.computed;
+      const profile = { ...clone(DEFAULT_STATE.profile), ...(isRecord(next.profile) ? next.profile : {}) };
+      const today = now();
+      const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      next.targets = { ...next.targets, computed: next.targets.autoCompute === false
+        ? { ...computed, ...(Number.isFinite(trainingDayWaterMl) ? { workoutDayWaterMl: trainingDayWaterMl } : {}) }
+        : computeTargets(profile, weightOnDate(Array.isArray(next.bodyMetrics) ? next.bodyMetrics : [], day, profile.weightKg)) };
+    }
+    next.meta = {
+      ...clone(DEFAULT_STATE.meta),
+      ...(isRecord(next.meta) ? next.meta : {}),
+      schemaVersion: 4,
+      migrations: [
+        ...((Array.isArray(next.meta?.migrations) && next.meta.migrations) || []),
+        { from: currentVersion, to: 4, at: now().toISOString() }
       ]
     };
   }
