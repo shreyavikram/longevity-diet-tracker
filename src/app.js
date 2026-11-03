@@ -6,7 +6,8 @@ import {
   MACRO_NUTRIENTS,
   NUTRIENTS,
   NUTRIENT_SOURCES,
-  SOURCE_NUTRIENTS
+  SOURCE_NUTRIENTS,
+  STORAGE_KEYS
 } from './constants.js';
 import {
   computeTargets,
@@ -20,6 +21,7 @@ import {
   scaleNutrients
 } from './calculations.js';
 import { createStore, StorageWriteError } from './storage.js';
+import { openDeviceStorage } from './device-storage.js';
 import { dateLabel, macroLine, renderApp, renderInstallStatus, renderUpdateBanner, servingsTotalText } from './views.js';
 import { analyzeInput } from './analysis.js';
 import { createTextRecognizer } from './ocr.js';
@@ -1956,6 +1958,12 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     render();
   }
 
+  // Device storage writes finish after the action that made them (src/device-storage.js), so a refused write is
+  // reported here rather than by the action.
+  function reportStorageError(error) {
+    showError(new StorageWriteError('Your latest change could not be saved on this device. Export your data from Settings, then try again.', error));
+  }
+
   // Every user action reports failures on screen rather than failing silently.
   function guarded(handler) {
     return event => {
@@ -1999,11 +2007,16 @@ export function createApp({ store, fetchFn = globalThis.fetch, clock = () => new
     cloud.syncNow();
   }
 
-  return { start, navigate, getState: () => clone(state), dispatch, syncWorkouts, syncCloud: () => cloud.syncNow() };
+  return { start, navigate, getState: () => clone(state), dispatch, syncWorkouts, syncCloud: () => cloud.syncNow(), reportStorageError };
 }
 
 if (typeof document !== 'undefined' && typeof localStorage !== 'undefined') {
-  const store = createStore({ storage: localStorage });
-  createApp({ store }).start();
+  let app = null;
+  const early = [];
+  openDeviceStorage({ keys: STORAGE_KEYS, onError: error => app ? app.reportStorageError(error) : early.push(error) }).then(storage => {
+    app = createApp({ store: createStore({ storage }) });
+    app.start();
+    for (const error of early) app.reportStorageError(error);
+  });
 }
 
